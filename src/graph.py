@@ -74,10 +74,61 @@ Focus on actionable insights. Be specific about shared attributes like IPs, atta
         print(f"[SUPERVISOR] ⚠️  Error searching memory: {e}")
         print(f"[SUPERVISOR] Continuing without memory context")
 
+    # Campaign Detection: If 3+ similar incidents found, detect campaign
+    campaign_info = None
+    if len(similar_incidents) >= 3:
+        try:
+            from datetime import datetime, timedelta
+            
+            # Get all incident IDs (including current)
+            incident_ids = [inc["incident_id"] for inc in similar_incidents]
+            incident_ids.append(state["alert_id"])
+            
+            # Calculate time span
+            timestamps = []
+            for inc in similar_incidents:
+                try:
+                    ts = inc.get("timestamp", "")
+                    if ts:
+                        timestamps.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
+                except:
+                    pass
+            
+            if timestamps:
+                time_span = (max(timestamps) - min(timestamps)).total_seconds() / 3600  # hours
+            else:
+                time_span = 24.0  # Default
+            
+            # Calculate confidence based on similarity scores
+            avg_similarity = sum(inc["similarity_score"] for inc in similar_incidents) / len(similar_incidents)
+            confidence = min(0.95, avg_similarity * 1.1)  # Boost confidence slightly
+            
+            # Determine threat assessment
+            if time_span < 24:
+                assessment = "ONGOING_CAMPAIGN"
+            else:
+                assessment = "MULTI_WAVE_CAMPAIGN"
+            
+            campaign_info = {
+                "campaign_id": f"CAMPAIGN-{state['alert_id'][-8:].upper()}",
+                "confidence": confidence,
+                "incident_count": len(incident_ids),
+                "related_incidents": incident_ids,
+                "time_span_hours": time_span,
+                "threat_assessment": assessment,
+                "average_similarity": avg_similarity
+            }
+            
+            print(f"[SUPERVISOR] 🚨 CAMPAIGN DETECTED: {campaign_info['campaign_id']} ({len(incident_ids)} incidents, {confidence:.0%} confidence)")
+            
+        except Exception as campaign_error:
+            print(f"[SUPERVISOR] ⚠️  Error detecting campaign: {campaign_error}")
+
     return {
         "current_agent": "supervisor",
         "similar_incidents": similar_incidents,
         "memory_reasoning": memory_reasoning,
+        "campaign_info": campaign_info,
         "messages": [AIMessage(content=f"Supervisor received alert {state['alert_id']}. Found {len(similar_incidents)} similar past incidents.")]
     }
 

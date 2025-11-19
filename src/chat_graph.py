@@ -276,6 +276,142 @@ async def chat_without_streaming(
     return "No response generated"
 
 
+async def chat_with_history(
+    message: str,
+    history: list
+) -> tuple:
+    """
+    Chat function for Gradio that queries historical investigations
+    
+    Args:
+        message: User message
+        history: Chat history [[user, bot], ...]
+    
+    Returns:
+        Tuple of (updated_history, "")
+    """
+    from src.memory.manager import get_memory_manager
+    from src.llm_factory import get_llm
+    import json
+    import re
+    
+    # Initialize memory manager and LLM
+    memory_manager = get_memory_manager()
+    llm = get_llm(temperature=0.7)
+    
+    # Convert history to messages format
+    messages = []
+    for user_msg, bot_msg in history:
+        messages.append(HumanMessage(content=user_msg))
+        messages.append(AIMessage(content=bot_msg))
+    
+    # Add current message
+    messages.append(HumanMessage(content=message))
+    
+    # Classify intent
+    intent_prompt = f"""Classify this user query into one of these categories:
+
+Query: "{message}"
+
+Categories:
+- search_incidents: User wants to search/filter past incidents
+- get_statistics: User wants aggregated metrics/stats
+- explain_incident: User wants details about a specific incident
+- find_campaigns: User wants to know about campaigns
+- general: General question about the system
+
+Return only the category name."""
+    
+    try:
+        intent_response = await llm.ainvoke(intent_prompt)
+        intent = intent_response.content.strip().lower()
+    except:
+        intent = "general"
+    
+    # Search memory based on intent
+    search_results = []
+    
+    if intent == "search_incidents":
+        # Semantic search in incident database
+        try:
+            similar = await memory_manager.find_similar_incidents(
+                current_alert={"description": message},
+                k=5,
+                min_similarity=0.3
+            )
+            search_results = similar
+        except Exception as e:
+            print(f"[CHAT] Error searching incidents: {e}")
+    
+    elif intent == "get_statistics":
+        # Get stats
+        try:
+            # Extract time range from message (default: 7 days)
+            time_range = 168  # hours
+            if "last week" in message.lower() or "7 days" in message.lower():
+                time_range = 168
+            elif "last 24 hours" in message.lower() or "today" in message.lower():
+                time_range = 24
+            elif "last month" in message.lower() or "30 days" in message.lower():
+                time_range = 720
+            
+            stats = await memory_manager.get_statistics(
+                user_id="default_user",
+                time_range_hours=time_range
+            )
+            search_results = [stats]
+        except Exception as e:
+            print(f"[CHAT] Error getting statistics: {e}")
+    
+    elif intent == "explain_incident":
+        # Extract incident ID from query
+        match = re.search(r'ALT-[\d-]+', message.upper())
+        if match:
+            incident_id = match.group(0)
+            try:
+                incident = await memory_manager.get_incident_by_id(
+                    user_id="default_user",
+                    incident_id=incident_id
+                )
+                if incident:
+                    search_results = [incident]
+            except Exception as e:
+                print(f"[CHAT] Error retrieving incident: {e}")
+    
+    elif intent == "find_campaigns":
+        # Get all incidents and look for patterns
+        try:
+            all_incidents = await memory_manager.get_all_incidents(
+                user_id="default_user",
+                limit=50
+            )
+            search_results = all_incidents
+        except Exception as e:
+            print(f"[CHAT] Error finding campaigns: {e}")
+    
+    # Generate response
+    response_prompt = f"""You are a helpful SOC assistant answering questions about past security investigations.
+
+User Query: "{message}"
+
+Search Results:
+{json.dumps(search_results, indent=2, default=str)}
+
+Generate a helpful, concise response (3-5 sentences). Include specific details from the search results.
+If no results found, explain that politely."""
+    
+    try:
+        response = await llm.ainvoke(response_prompt)
+        bot_response = response.content
+    except Exception as e:
+        bot_response = f"I encountered an error processing your query: {str(e)}"
+    
+    # Update history
+    history.append([message, bot_response])
+    
+    return history, ""
+
+
 # ===== Example Usage =====
 
 if __name__ == "__main__":

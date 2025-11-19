@@ -16,7 +16,7 @@ import html
 import time
 from pathlib import Path
 from datetime import datetime
-from typing import AsyncGenerator, Tuple, Dict, Any, List
+from typing import AsyncGenerator, Tuple, Dict, Any, List, Optional
 import gradio as gr
 
 from src.graph import investigate_alert_streaming as graph_streaming
@@ -42,7 +42,7 @@ def sanitize_html(text: Any) -> str:
 
 async def investigate_alert_streaming_v2(
     alert_json: str
-) -> AsyncGenerator[Tuple[str, str, str], None]:
+) -> AsyncGenerator[Tuple[str, str, str, str, str, str], None]:
     """
     REAL STREAMING investigation with bento grid layout (Gradio 5.x native support)
 
@@ -50,12 +50,15 @@ async def investigate_alert_streaming_v2(
     - Compact status card (combines node status, progress, metrics)
     - Agent reasoning with integrated key events (LARGE - live LLM token streaming)
     - Investigation results (HTML report)
+    - Memory reasoning (LLM explanation of similar incidents)
+    - Similar incidents HTML (visual cards)
+    - Campaign alert HTML (if campaign detected)
 
     Args:
         alert_json: JSON string containing alert data
 
     Yields:
-        Tuple of (status_compact, reasoning_with_events, result_html)
+        Tuple of (status_compact, reasoning_with_events, result_html, memory_reasoning, similar_incidents_html, campaign_alert_html)
     """
 
     # Helper to get timestamp
@@ -94,7 +97,10 @@ async def investigate_alert_streaming_v2(
         "recommendations": [],
         "report": "",
         "enrichment_data": {},
-        "workflow_status": "in_progress"
+        "workflow_status": "in_progress",
+        "similar_incidents": [],  # Memory fields
+        "memory_reasoning": "",
+        "campaign_info": None
     }
     
     # NEW: Track reasoning text per node
@@ -126,7 +132,10 @@ async def investigate_alert_streaming_v2(
         yield (
             _get_initial_status_compact_html(),
             "",  # Empty reasoning initially
-            ""  # No results yet
+            "",  # No results yet
+            "*No memory context available yet. Run an investigation first.*",  # Memory reasoning
+            "",  # Similar incidents HTML
+            ""  # Campaign alert HTML
         )
 
         async for event in graph_streaming(alert_data):
@@ -185,10 +194,22 @@ async def investigate_alert_streaming_v2(
                 )
                 
                 # Yield with updated reasoning (REAL-TIME TOKEN STREAMING)
+                # Extract memory data from accumulated state
+                memory_reasoning = accumulated_state.get("memory_reasoning", "")
+                similar_incidents = accumulated_state.get("similar_incidents", [])
+                campaign_info = accumulated_state.get("campaign_info")
+                
+                memory_reasoning_md = memory_reasoning if memory_reasoning else "*No memory reasoning available yet.*"
+                similar_incidents_html = format_similar_incidents_html(similar_incidents)
+                campaign_alert_html = format_campaign_alert_html(campaign_info)
+                
                 yield (
                     _get_status_compact_html(current_node or "supervisor", completed_nodes, skipped_nodes, current_progress, time.time() - start_time),
                     reasoning_display,  # Live reasoning
-                    ""  # No HTML results yet
+                    "",  # No HTML results yet
+                    memory_reasoning_md,  # Memory reasoning
+                    similar_incidents_html,  # Similar incidents
+                    campaign_alert_html  # Campaign alert
                 )
                 continue  # Skip the normal yield at the end
                 
@@ -260,10 +281,22 @@ async def investigate_alert_streaming_v2(
                 get_key_events_summary(activity_log_lines)  # NEW: Integrated key events
             )
 
+            # Extract memory data from accumulated state
+            memory_reasoning = accumulated_state.get("memory_reasoning", "")
+            similar_incidents = accumulated_state.get("similar_incidents", [])
+            campaign_info = accumulated_state.get("campaign_info")
+            
+            memory_reasoning_md = memory_reasoning if memory_reasoning else "*No memory reasoning available yet.*"
+            similar_incidents_html = format_similar_incidents_html(similar_incidents)
+            campaign_alert_html = format_campaign_alert_html(campaign_info)
+            
             yield (
                 _get_status_compact_html(current_node or "supervisor", completed_nodes, skipped_nodes, current_progress, time.time() - start_time),
                 reasoning_display,  # Reasoning with integrated events
-                ""  # No HTML results yet
+                "",  # No HTML results yet
+                memory_reasoning_md,  # Memory reasoning
+                similar_incidents_html,  # Similar incidents
+                campaign_alert_html  # Campaign alert
             )
 
         # Investigation complete - format results
@@ -319,10 +352,22 @@ async def investigate_alert_streaming_v2(
                 get_key_events_summary(activity_log_lines)
             )
 
+            # Extract final memory data
+            memory_reasoning = accumulated_state.get("memory_reasoning", "")
+            similar_incidents = accumulated_state.get("similar_incidents", [])
+            campaign_info = accumulated_state.get("campaign_info")
+            
+            memory_reasoning_md = memory_reasoning if memory_reasoning else "*No memory reasoning available.*"
+            similar_incidents_html = format_similar_incidents_html(similar_incidents)
+            campaign_alert_html = format_campaign_alert_html(campaign_info)
+            
             yield (
                 _get_status_compact_html("communication", completed_nodes, skipped_nodes, 100, total_time),
                 final_reasoning,  # Complete reasoning with events
-                html_output
+                html_output,  # Investigation results
+                memory_reasoning_md,  # Memory reasoning
+                similar_incidents_html,  # Similar incidents
+                campaign_alert_html  # Campaign alert
             )
         else:
             # No final state - error
@@ -330,7 +375,10 @@ async def investigate_alert_streaming_v2(
             yield (
                 _get_status_compact_html(current_node or "supervisor", completed_nodes, skipped_nodes, current_progress, time.time() - start_time),
                 "",  # Empty reasoning on error
-                error_html
+                error_html,
+                "*No memory context available.*",  # Memory reasoning
+                "",  # Similar incidents HTML
+                ""  # Campaign alert HTML
             )
 
     except json.JSONDecodeError as e:
@@ -345,7 +393,10 @@ async def investigate_alert_streaming_v2(
         yield (
             _get_initial_status_compact_html(),
             "",  # Empty reasoning on error
-            error_html
+            error_html,
+            "*No memory context available.*",  # Memory reasoning
+            "",  # Similar incidents HTML
+            ""  # Campaign alert HTML
         )
 
     except Exception as e:
@@ -361,7 +412,10 @@ async def investigate_alert_streaming_v2(
         yield (
             _get_initial_status_compact_html(),
             "",  # Empty reasoning on error
-            error_html
+            error_html,
+            "*No memory context available.*",  # Memory reasoning
+            "",  # Similar incidents HTML
+            ""  # Campaign alert HTML
         )
 
 
@@ -1668,31 +1722,138 @@ def create_gradio_interface():
                                 elem_id="result_html"
                             )
 
-                    # ===== TAB 2: MEMORY CONTEXT (Coming Soon) =====
+                    # ===== TAB 2: MEMORY CONTEXT =====
                     with gr.Tab("🧠 Memory Context", id="tab_memory"):
-                        gr.Markdown("""
-                        # 🧠 Memory Context
+                        # Memory Reasoning Panel
+                        with gr.Column(elem_id="memory_reasoning_card"):
+                            gr.HTML("""
+                                <div style="margin-bottom: 20px;">
+                                    <div style="font-family: 'Inter', sans-serif; font-size: 1.1rem; font-weight: 600; color: #e8e8e8; margin-bottom: 8px;">
+                                        💭 Memory Reasoning
+                                    </div>
+                                    <div style="font-family: 'Inter', sans-serif; font-size: 0.85rem; color: #999999;">
+                                        AI explains why past incidents are similar
+                                    </div>
+                                </div>
+                            """)
+                            memory_reasoning_display = gr.Markdown(
+                                value="*No memory context available yet. Run an investigation first.*",
+                                show_label=False,
+                                elem_id="memory_reasoning_panel"
+                            )
 
-                        **Coming Soon in Phase 2:**
-                        - 💭 Memory Reasoning (AI explains why incidents are similar)
-                        - 🔍 Similar Past Incidents (visual cards with similarity scores)
-                        - 🚨 Campaign Detection (coordinated attack alerts)
+                        # Similar Incidents Cards
+                        with gr.Column(elem_id="similar_incidents_card"):
+                            gr.HTML("""
+                                <div style="margin-bottom: 20px; margin-top: 24px;">
+                                    <div style="font-family: 'Inter', sans-serif; font-size: 1.1rem; font-weight: 600; color: #e8e8e8; margin-bottom: 8px;">
+                                        🔍 Similar Past Incidents
+                                    </div>
+                                    <div style="font-family: 'Inter', sans-serif; font-size: 0.85rem; color: #999999;">
+                                        Incidents with matching patterns and behaviors
+                                    </div>
+                                </div>
+                            """)
+                            similar_incidents_display = gr.HTML(
+                                value="",
+                                show_label=False,
+                                elem_id="similar_incidents_html"
+                            )
 
-                        *Run an investigation first, then this tab will show memory-based intelligence.*
-                        """)
+                        # Campaign Detection Alert (conditional visibility)
+                        campaign_alert_display = gr.HTML(
+                            value="",
+                            visible=True,
+                            show_label=False,
+                            elem_id="campaign_alert_html"
+                        )
 
-                    # ===== TAB 3: CHAT (Coming Soon) =====
+                    # ===== TAB 3: CHAT =====
                     with gr.Tab("💬 Chat", id="tab_chat"):
-                        gr.Markdown("""
-                        # 💬 Chat with Investigation History
-
-                        **Coming Soon in Phase 3:**
-                        - Conversational interface to query past investigations
-                        - Natural language queries like "Show me all phishing alerts"
-                        - Statistics and analytics on demand
-
-                        *This feature will allow you to chat with the SOC Orchestrator about historical data.*
-                        """)
+                        with gr.Column(elem_id="chat_card"):
+                            gr.HTML("""
+                                <div style="margin-bottom: 20px;">
+                                    <div style="font-family: 'Inter', sans-serif; font-size: 1.25rem; font-weight: 600; color: #e8e8e8; margin-bottom: 8px;">
+                                        Chat with Investigation History
+                                    </div>
+                                    <div style="font-family: 'Inter', sans-serif; font-size: 0.875rem; color: #999999;">
+                                        Ask questions about past investigations, campaigns, and statistics
+                                    </div>
+                                </div>
+                            """)
+                            
+                            # Chatbot
+                            chatbot = gr.Chatbot(
+                                height=500,
+                                show_label=False,
+                                elem_id="chat_history",
+                                bubble_full_width=False
+                            )
+                            
+                            # Message input
+                            with gr.Row():
+                                chat_input = gr.Textbox(
+                                    placeholder="Ask about past investigations...",
+                                    show_label=False,
+                                    scale=9,
+                                    container=False
+                                )
+                                chat_send = gr.Button("Send", scale=1, variant="primary")
+                            
+                            # Example queries
+                            gr.HTML("""
+                                <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #1a1a1a;">
+                                    <div style="font-size: 0.8rem; color: #666; margin-bottom: 12px; font-family: 'Inter', sans-serif;">Quick Actions:</div>
+                                </div>
+                            """)
+                            
+                            with gr.Row():
+                                example_btn1 = gr.Button("📊 Show statistics", size="sm")
+                                example_btn2 = gr.Button("🔍 High-severity alerts", size="sm")
+                                example_btn3 = gr.Button("🚨 Active campaigns", size="sm")
+                            
+                            # Connect chat functionality
+                            from src.chat_graph import chat_with_history
+                            
+                            async def submit_chat(message, history):
+                                """Handle chat submission (async)"""
+                                if not message.strip():
+                                    return history, ""
+                                try:
+                                    new_history, _ = await chat_with_history(message, history)
+                                    return new_history, ""
+                                except Exception as e:
+                                    error_msg = f"Error: {str(e)}"
+                                    history.append([message, error_msg])
+                                    return history, ""
+                            
+                            chat_input.submit(
+                                fn=submit_chat,
+                                inputs=[chat_input, chatbot],
+                                outputs=[chatbot, chat_input]
+                            )
+                            
+                            chat_send.click(
+                                fn=submit_chat,
+                                inputs=[chat_input, chatbot],
+                                outputs=[chatbot, chat_input]
+                            )
+                            
+                            # Example button handlers
+                            example_btn1.click(
+                                fn=lambda: "Show me statistics for the last 7 days",
+                                outputs=chat_input
+                            )
+                            
+                            example_btn2.click(
+                                fn=lambda: "Show me all high-severity alerts",
+                                outputs=chat_input
+                            )
+                            
+                            example_btn3.click(
+                                fn=lambda: "Are there any active attack campaigns?",
+                                outputs=chat_input
+                            )
 
 
         # Connect dropdown to alert input
@@ -1708,9 +1869,12 @@ def create_gradio_interface():
             fn=investigate_alert_streaming_v2,
             inputs=alert_input,
             outputs=[
-                status_compact,      # Compact status card
-                reasoning_panel,     # Reasoning with integrated events
-                result_html          # Investigation results
+                status_compact,              # Compact status card
+                reasoning_panel,             # Reasoning with integrated events
+                result_html,                 # Investigation results
+                memory_reasoning_display,    # Memory reasoning (Tab 2)
+                similar_incidents_display,   # Similar incidents (Tab 2)
+                campaign_alert_display       # Campaign alert (Tab 2)
             ]
         )
 
