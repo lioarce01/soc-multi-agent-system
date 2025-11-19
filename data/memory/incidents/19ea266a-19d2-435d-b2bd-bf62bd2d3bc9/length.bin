@@ -1,0 +1,2 @@
+invalid type: string "Alert Type: phishing\nDescription: User received email with subject 'Invoice #12345' containing malicious attachment invoice.exe from unknown sender external@malicious-domain.com\nAttack Stage: Initial Access\nThreat Category: Initial Compromise\nMITRE Techniques: Phishing: Spearphishing Attachment\nThreat Score: 0.42\nABLE segment_metadata ADD COLUMN bool_value INTEGER;
+ÿÿÿÿ

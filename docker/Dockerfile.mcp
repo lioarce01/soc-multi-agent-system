@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install FastMCP and dependencies
+RUN pip install --no-cache-dir \
+    fastmcp==2.0.0 \
+    aiohttp==3.9.1 \
+    python-dotenv==1.0.0 \
+    pydantic==2.5.0
+
+# Copy MCP server code
+COPY mcp_servers/*.py ./
+
+# Run MCP server (determined by env var)
+CMD python ${MCP_SERVER_NAME}_server.py

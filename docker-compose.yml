@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  # Main SOC Orchestrator application
+  soc-app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    ports:
+      - "7860:7860"  # Gradio interface
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - SIEM_MCP_URL=http://siem-mcp:8001/mcp
+      - THREAT_INTEL_MCP_URL=http://threat-intel-mcp:8002/mcp
+      - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2:-false}
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-soc-orchestrator}
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+    depends_on:
+      - siem-mcp
+      - threat-intel-mcp
+    networks:
+      - soc-network
+
+  # SIEM MCP Server
+  siem-mcp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mcp
+    ports:
+      - "8001:8001"
+    environment:
+      - MCP_SERVER_NAME=siem
+      - SIEM_API_KEY=${SIEM_API_KEY}
+    networks:
+      - soc-network
+
+  # Threat Intel MCP Server
+  threat-intel-mcp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mcp
+    ports:
+      - "8002:8002"
+    environment:
+      - MCP_SERVER_NAME=threat_intel
+    networks:
+      - soc-network
+
+networks:
+  soc-network:
+    driver: bridge

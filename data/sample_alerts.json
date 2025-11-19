@@ -1,0 +1,93 @@
+[
+  {
+    "id": "ALT-2024-001",
+    "timestamp": "2024-01-15T14:30:00Z",
+    "type": "phishing",
+    "severity": "high",
+    "title": "Suspicious phishing email detected",
+    "description": "User received email with subject 'Invoice #12345' containing malicious attachment invoice.exe from unknown sender external@malicious-domain.com",
+    "source_ip": "45.76.123.45",
+    "destination_ip": "192.168.1.100",
+    "user": "john.doe@company.com",
+    "hostname": "WS-001",
+    "indicators": {
+      "sender": "external@malicious-domain.com",
+      "subject": "Invoice #12345",
+      "attachment": "invoice.exe",
+      "attachment_hash": "d41d8cd98f00b204e9800998ecf8427e"
+    }
+  },
+  {
+    "id": "ALT-2024-002",
+    "timestamp": "2024-01-15T15:45:00Z",
+    "type": "unauthorized_access",
+    "severity": "critical",
+    "title": "Multiple failed login attempts",
+    "description": "Failed login attempts: 15 tries in 5 minutes from IP 185.220.101.1 to admin account",
+    "source_ip": "185.220.101.1",
+    "destination_ip": "192.168.1.10",
+    "user": "admin",
+    "hostname": "SERVER-01",
+    "indicators": {
+      "failed_attempts": 15,
+      "time_window": "5 minutes",
+      "account_targeted": "admin",
+      "authentication_method": "SSH"
+    }
+  },
+  {
+    "id": "ALT-2024-003",
+    "timestamp": "2024-01-15T16:20:00Z",
+    "type": "malware",
+    "severity": "critical",
+    "title": "Malicious process detected",
+    "description": "Endpoint detected malicious process 'cryptominer.exe' connecting to known C2 server 192.0.2.1:8080",
+    "source_ip": "192.168.1.55",
+    "destination_ip": "192.0.2.1",
+    "user": "jane.smith@company.com",
+    "hostname": "WS-015",
+    "indicators": {
+      "process_name": "cryptominer.exe",
+      "process_hash": "5d41402abc4b2a76b9719d911017c592",
+      "c2_server": "192.0.2.1:8080",
+      "network_protocol": "TCP"
+    }
+  },
+  {
+    "id": "ALT-2024-004",
+    "timestamp": "2024-01-15T17:10:00Z",
+    "type": "data_exfiltration",
+    "severity": "high",
+    "title": "Unusual data transfer detected",
+    "description": "Large data transfer (5GB) to external cloud storage service from internal database server",
+    "source_ip": "192.168.10.50",
+    "destination_ip": "52.218.48.101",
+    "user": "db_service_account",
+    "hostname": "DB-PROD-01",
+    "indicators": {
+      "bytes_transferred": 5368709120,
+      "destination_service": "AWS S3",
+      "transfer_duration": "45 minutes",
+      "unusual_time": "after business hours"
+    }
+  },
+  {
+    "id": "ALT-2024-005",
+    "timestamp": "2024-01-15T18:00:00Z",
+    "type": "suspicious_login",
+    "severity": "medium",
+    "title": "Login from unusual location",
+    "description": "User login from geolocation: Russia (normally logs in from USA)",
+    "source_ip": "93.184.216.34",
+    "destination_ip": "192.168.1.20",
+    "user": "michael.chen@company.com",
+    "hostname": "VPN-GATEWAY",
+    "indicators": {
+      "normal_country": "USA",
+      "login_country": "Russia",
+      "normal_login_time": "9am-5pm EST",
+      "login_time": "3am EST",
+      "device_type": "unknown"
+    }
+  }
+]

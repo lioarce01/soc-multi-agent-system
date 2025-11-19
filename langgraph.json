@@ -1,0 +1,9 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "investigation_agent": "./src/graph.py:graph",
+    "chat_agent": "./src/chat_graph.py:graph"
+  },
+  "env": ".env",
+  "python_version": "3.11"
+}

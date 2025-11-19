@@ -1,0 +1,47 @@
+# Main Application Dependencies (Global venv for LangGraph)
+# LangGraph/LangChain 1.0 LTS with compatible versions
+# Last updated: 2025-11-17 (Migrated to v1.0)
+
+# ===== Core LangGraph/LangChain Stack (v1.0 LTS) =====
+langgraph>=1.0.0,<2.0.0
+langgraph-cli>=0.1.0                     # LangGraph Studio (langgraph dev)
+langchain>=1.0.0,<2.0.0
+langchain-core>=1.0.0,<2.0.0
+
+# ===== LangChain Integrations - LLM Providers =====
+langchain-openai>=1.0.0,<2.0.0           # OpenAI (GPT-4, GPT-4o)
+langchain-anthropic>=1.0.0,<2.0.0        # Anthropic Claude
+langchain-google-genai>=3.0.0,<4.0.0     # Google Gemini (v3 for v1.0 compatibility)
+langchain-community>=0.4.0,<1.0.0        # Community providers (v0.4 for stability with v1.0)
+langchain-classic>=1.0.0,<2.0.0          # Legacy functions (required by community)
+langchain-text-splitters>=1.0.0,<2.0.0   # Text splitting utilities
+langchain-mcp-adapters>=0.1.0            # MCP (Model Context Protocol) integration
+
+# Optional: LiteLLM Gateway (unified interface for 100+ LLM providers)
+# litellm>=1.0.0
+
+# ===== Vector Store & Embeddings =====
+chromadb>=0.4.22
+sentence-transformers>=2.3.1
+
+# ===== Web Interface (REQUIRED for demos/POC) =====
+# Gradio 5.49.1 (Latest stable with MCP support, async streaming, performance metrics)
+# See: https://www.gradio.app/changelog
+gradio>=5.49.1,<6.0.0
+gradio-client>=1.0.0  # Client library for Gradio apps
+
+# ===== Base Utilities =====
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+aiohttp>=3.9.1
+
+# ===== Observability (Optional) =====
+# langsmith>=0.1.0
+
+# ===== Security (Optional) =====
+# cryptography>=41.0.7
+# python-jose[cryptography]>=3.3.0
+
+# ===== Development & Testing =====
+pytest>=7.4.0
+pytest-asyncio>=0.21.0

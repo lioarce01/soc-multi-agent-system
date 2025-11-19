@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soc-orchestrator"
+version = "0.1.0"
+description = "Multi-Agent AI System for Automated Security Alert Investigation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "SOC Orchestrator Team"}
+]
+
+dependencies = [
+    "langgraph>=1.0.0,<2.0.0",
+    "langgraph-cli>=0.1.0",
+    "langchain-core>=0.3.0,<0.4.0",
+    "langchain>=0.3.0,<0.4.0",
+    "langchain-openai>=0.2.0",
+    "langchain-community>=0.3.0",
+    "langchain-mcp-adapters>=0.1.0",
+    "chromadb>=0.4.22",
+    "sentence-transformers>=2.3.1",
+    "gradio>=4.15.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.5.0",
+    "aiohttp>=3.9.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "mcp_servers*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.json", "*.md"]
