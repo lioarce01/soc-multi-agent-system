@@ -150,7 +150,9 @@ mcp_server = FastMCP(
 
 # ===== MCP Tools =====
 
-@mcp_server.tool()
+@mcp_server.tool(
+    description="Query SIEM (Security Information and Event Management) for security events with filters. Use when you need to search for security events, logs, or incidents. Supports filtering by source IP, destination IP, event type (e.g., failed_login, email_received), username, and time range. Returns list of matching security events with details."
+)
 async def query_siem(
     source_ip: Optional[str] = None,
     destination_ip: Optional[str] = None,
@@ -195,7 +197,9 @@ async def query_siem(
     }
 
 
-@mcp_server.tool()
+@mcp_server.tool(
+    description="Get threat intelligence and reputation data for an IP address from multiple providers. Use when you need to check if an IP address is malicious, suspicious, or has a bad reputation. Returns aggregated threat intelligence including reputation (malicious/suspicious/clean/unknown), threat score, categories, and recommendations. Works with public IP addresses."
+)
 async def get_threat_intel(ip_address: str) -> Dict:
     """
     Get threat intelligence for an IP address from multiple providers
@@ -257,7 +261,9 @@ async def get_threat_intel(ip_address: str) -> Dict:
         }
 
 
-@mcp_server.tool()
+@mcp_server.tool(
+    description="Get all security events and activity history for a specific user. Use when you need to analyze user behavior, check user activity patterns, or investigate user-related security incidents. Returns user activity summary including total events, event types, unique IPs, last activity timestamp, suspicious activity count, and risk level."
+)
 async def get_user_events(username: str, time_range: str = "last_7d") -> Dict:
     """
     Get all security events for a specific user
@@ -283,7 +289,9 @@ async def get_user_events(username: str, time_range: str = "last_7d") -> Dict:
     }
 
 
-@mcp_server.tool()
+@mcp_server.tool(
+    description="Search SIEM logs with a query string. Use when you need to search for specific security events using field:value format (e.g., 'source_ip:45.76.123.45', 'user:john.doe@company.com'). Returns matching security events based on the search query."
+)
 async def search_siem_logs(query: str, limit: int = 50) -> Dict:
     """
     Search SIEM logs with a query string
@@ -305,7 +313,9 @@ async def search_siem_logs(query: str, limit: int = 50) -> Dict:
     }
 
 
-@mcp_server.tool()
+@mcp_server.tool(
+    description="Find security events related to a specific event based on correlation fields (e.g., source_ip, user). Use when you need to find related incidents, correlate events, or discover patterns. Returns related events and correlation summary within a time window."
+)
 async def get_related_events(
     event_id: str,
     correlation_fields: List[str] = None,
@@ -366,7 +376,9 @@ async def get_related_events(
     }
 
 
-@mcp_server.tool()
+@mcp_server.tool(
+    description="Get endpoint security data from EDR (Endpoint Detection and Response) system. Use when you need to check endpoint status, running processes, network connections, security tools status, or threats detected on a specific hostname. Returns comprehensive endpoint security information including processes, network connections, and security tool status."
+)
 async def get_endpoint_data(hostname: str) -> Dict:
     """
     Get endpoint security data (simulated EDR integration)
@@ -409,7 +421,9 @@ async def get_endpoint_data(hostname: str) -> Dict:
     return endpoint_data
 
 
-@mcp_server.tool()
+@mcp_server.tool(
+    description="Get aggregated alert and event statistics. Use when you need summary metrics, counts by severity or type, trends, or overall statistics about security alerts and events. Returns aggregated statistics including total events, counts by severity, counts by event type, unique IPs, and unique users."
+)
 async def get_alert_statistics(time_range: str = "last_24h") -> Dict:
     """
     Get aggregated alert statistics

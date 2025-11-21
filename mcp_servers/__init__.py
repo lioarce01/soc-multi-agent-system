@@ -1,3 +1,3 @@
 """
-MCP Server implementations: SIEM, Threat Intel, Slack
+MCP Server implementations: SIEM, Threat Intel, Memory & Chat
 """
