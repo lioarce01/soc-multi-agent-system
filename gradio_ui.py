@@ -836,34 +836,57 @@ def _format_activity_log(timestamp: str, node: str, message: str, emoji: str = "
 def get_key_events_summary(activity_log_lines: List[str], max_events: int = 8) -> str:
     """
     Extract only key events (node complete, errors, important milestones)
-    Filters out noise from state_update events
-    
+    Filters out noise from state_update events and deduplicates similar messages
+
     Args:
         activity_log_lines: Full list of activity log lines
         max_events: Maximum number of key events to show
-    
+
     Returns:
         Markdown formatted string with key events
     """
     key_events = []
-    important_keywords = ["✅", "❌", "🎉", "COMPLETED", "ERROR", "FAILED", "started", "Threat Score"]
-    
+    seen_event_keys = set()  # Track unique events to prevent duplicates
+    important_keywords = ["✅", "❌", "🎉", "COMPLETED", "ERROR", "FAILED", "started processing", "Threat Score"]
+
     for line in activity_log_lines:
         # Filter for important events only
         if any(keyword in line for keyword in important_keywords):
-            key_events.append(line)
-    
+            # Extract event key (remove timestamp for deduplication)
+            # Format: [HH:MM:SS] EMOJI NODE -> message
+            # We want to deduplicate based on NODE + message content
+            parts = line.split(" -> ", 1)
+            if len(parts) == 2:
+                # Get the part after timestamp: "EMOJI NODE"
+                prefix_parts = parts[0].split("] ", 1)
+                if len(prefix_parts) == 2:
+                    event_key = prefix_parts[1].strip() + " -> " + parts[1].strip()
+                else:
+                    event_key = line
+            else:
+                event_key = line
+
+            # Only add if we haven't seen this event type before
+            if event_key not in seen_event_keys:
+                seen_event_keys.add(event_key)
+                key_events.append(line)
+
     # Get last N events
     recent_events = key_events[-max_events:] if len(key_events) > max_events else key_events
-    
+
     if not recent_events:
         return ""
-    
-    # Format as markdown
+
+    # Format as markdown with proper line breaks for Gradio
+    # Use HTML <br> tags for reliable line breaks
     events_md = "\n\n---\n\n### Key Events\n\n"
+    event_lines = []
     for event in recent_events:
-        events_md += f"- `{event}`\n"
-    
+        event_lines.append(f"○ `{event}`")
+
+    # Join with <br> for reliable line breaks in Gradio Markdown
+    events_md += "<br>\n".join(event_lines)
+
     return events_md
 
 
@@ -881,9 +904,21 @@ def format_similar_incidents_html(similar_incidents: List[Dict]) -> str:
     """
     if not similar_incidents:
         return """
-        <div style="padding: 40px; text-align: center; color: #666; font-family: 'Inter', sans-serif;">
-            <p style="font-size: 0.9rem;">No similar incidents found in memory.</p>
-            <p style="font-size: 0.8rem; color: #444; margin-top: 8px;">Run more investigations to build historical context.</p>
+        <div style="padding: 32px; text-align: center; font-family: 'Inter', sans-serif;
+                    background: rgba(255, 255, 255, 0.02); border-radius: 12px; border: 1px dashed #333;">
+            <div style="font-size: 2rem; margin-bottom: 12px;">🆕</div>
+            <p style="font-size: 0.95rem; color: #e8e8e8; margin-bottom: 8px; font-weight: 500;">
+                New Pattern Detected
+            </p>
+            <p style="font-size: 0.85rem; color: #999; line-height: 1.5; max-width: 400px; margin: 0 auto;">
+                No similar incidents found in memory. This appears to be a new attack pattern
+                that the system hasn't seen before.
+            </p>
+            <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #1a1a1a;">
+                <p style="font-size: 0.8rem; color: #666;">
+                    ✅ This investigation will be saved to memory for future reference
+                </p>
+            </div>
         </div>
         """
 
@@ -1632,6 +1667,42 @@ def create_gradio_interface():
         * {
             transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease !important;
         }
+        """,
+        js="""
+        function setupAutoScroll() {
+            // Auto-scroll reasoning panel when content updates
+            const setupObserver = () => {
+                const reasoningPanel = document.querySelector('#reasoning_panel');
+                if (reasoningPanel) {
+                    // Create a MutationObserver to watch for content changes
+                    const observer = new MutationObserver((mutations) => {
+                        // Scroll to bottom when content changes
+                        reasoningPanel.scrollTop = reasoningPanel.scrollHeight;
+                    });
+
+                    // Start observing
+                    observer.observe(reasoningPanel, {
+                        childList: true,
+                        subtree: true,
+                        characterData: true
+                    });
+
+                    console.log('[SOC] Auto-scroll enabled for reasoning panel');
+                } else {
+                    // Retry after a short delay if element not found
+                    setTimeout(setupObserver, 500);
+                }
+            };
+
+            // Wait for DOM to be ready
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', setupObserver);
+            } else {
+                setupObserver();
+            }
+
+            return [];
+        }
         """
     ) as demo:
 
@@ -1812,29 +1883,30 @@ def create_gradio_interface():
                                 example_btn2 = gr.Button("🔍 High-severity alerts", size="sm")
                                 example_btn3 = gr.Button("🚨 Active campaigns", size="sm")
                             
-                            # Connect chat functionality
-                            from src.chat_graph import chat_with_history
-                            
-                            async def submit_chat(message, history):
-                                """Handle chat submission (async)"""
+                            # Connect chat functionality with streaming status updates
+                            from src.chat_graph import chat_with_history_streaming
+
+                            async def submit_chat_streaming(message, history):
+                                """Handle chat submission with streaming status updates"""
                                 if not message.strip():
-                                    return history, ""
+                                    yield history, ""
+                                    return
                                 try:
-                                    new_history, _ = await chat_with_history(message, history)
-                                    return new_history, ""
+                                    async for updated_history, _ in chat_with_history_streaming(message, history):
+                                        yield updated_history, ""
                                 except Exception as e:
                                     error_msg = f"Error: {str(e)}"
                                     history.append([message, error_msg])
-                                    return history, ""
-                            
+                                    yield history, ""
+
                             chat_input.submit(
-                                fn=submit_chat,
+                                fn=submit_chat_streaming,
                                 inputs=[chat_input, chatbot],
                                 outputs=[chatbot, chat_input]
                             )
-                            
+
                             chat_send.click(
-                                fn=submit_chat,
+                                fn=submit_chat_streaming,
                                 inputs=[chat_input, chatbot],
                                 outputs=[chatbot, chat_input]
                             )

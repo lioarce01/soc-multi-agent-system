@@ -492,17 +492,17 @@ Be concise and specific. Include relevant details from the tool results. If a us
 def _fallback_chat_response(message: str, history: list, error_detail: str = None) -> tuple:
     """
     Fallback chat response when MCP tools are unavailable
-    
+
     Args:
         message: User message
         history: Chat history
         error_detail: Optional error details for better diagnostics
-    
+
     Returns:
         Tuple of (updated_history, "")
     """
     error_msg = error_detail or "MCP connection failed"
-    
+
     # Provide helpful error message with instructions
     bot_response = f"""I'm sorry, but the investigation history tools are currently unavailable.
 
@@ -521,9 +521,232 @@ def _fallback_chat_response(message: str, history: list, error_detail: str = Non
 3. Check that the servers are accessible and not blocked by firewall.
 
 Once the servers are running, please try your question again."""
-    
+
     history.append([message, bot_response])
     return history, ""
+
+
+async def chat_with_history_streaming(
+    message: str,
+    history: list
+) -> AsyncGenerator[tuple, None]:
+    """
+    Chat function with streaming status updates for Gradio
+    Yields intermediate status messages while processing
+
+    Args:
+        message: User message
+        history: Chat history [[user, bot], ...]
+
+    Yields:
+        Tuple of (updated_history, "")
+    """
+    from src.mcp_integration import MCPClientManager
+    from src.llm_factory import get_llm
+    from langchain.agents import create_agent
+    from langchain_core.messages import HumanMessage, AIMessage
+
+    # Helper to create status message
+    def make_status(status_text: str) -> list:
+        """Create history with status message"""
+        return history + [[message, f"*{status_text}*"]]
+
+    try:
+        # Status: Connecting
+        yield make_status("🔌 Connecting to memory database..."), ""
+
+        # Initialize MCP client and get memory tools
+        mcp_manager = MCPClientManager()
+        try:
+            await mcp_manager.initialize()
+        except Exception as init_error:
+            print(f"[CHAT AGENT] ⚠️  MCP initialization failed: {init_error}")
+            result, _ = _fallback_chat_response(message, history, str(init_error))
+            yield result, ""
+            return
+
+        # Status: Getting tools
+        yield make_status("🛠️ Loading analysis tools..."), ""
+
+        # Get all tools from MCP
+        try:
+            all_tools = await mcp_manager.get_tools()
+        except Exception as tools_error:
+            print(f"[CHAT AGENT] ⚠️  Failed to get tools: {tools_error}")
+            result, _ = _fallback_chat_response(message, history, str(tools_error))
+            yield result, ""
+            return
+
+        if not all_tools:
+            print(f"[CHAT AGENT] ⚠️  No tools available from MCP servers")
+            result, _ = _fallback_chat_response(message, history, "No tools available")
+            yield result, ""
+            return
+
+        # Log all tools received for debugging
+        print(f"[CHAT AGENT] 📋 Received {len(all_tools)} tools from MCP:")
+        for tool in all_tools:
+            tool_name = getattr(tool, 'name', 'NO_NAME')
+            tool_desc = getattr(tool, 'description', 'NO_DESC')[:50] if hasattr(tool, 'description') else 'NO_DESC'
+            print(f"  - {tool_name}: {tool_desc}...")
+
+        # Filter out invalid tools
+        valid_tools = []
+        invalid_tool_names = []
+        invalid_tool_reasons = {}
+
+        for tool in all_tools:
+            try:
+                tool_name = getattr(tool, 'name', None)
+
+                if not tool_name or tool_name == '':
+                    invalid_tool_names.append("unnamed_tool")
+                    invalid_tool_reasons["unnamed_tool"] = "No name attribute"
+                    continue
+
+                invalid_names = ['default_api', '', 'api', 'default', 'tool', 'function']
+                if tool_name in invalid_names or tool_name.startswith('_') or tool_name.startswith('__'):
+                    invalid_tool_names.append(tool_name)
+                    invalid_tool_reasons[tool_name] = f"Invalid name pattern"
+                    continue
+
+                if not (hasattr(tool, 'invoke') or hasattr(tool, 'ainvoke') or hasattr(tool, '__call__')):
+                    invalid_tool_names.append(tool_name)
+                    invalid_tool_reasons[tool_name] = "No invoke/ainvoke method"
+                    continue
+
+                if not hasattr(tool, 'description') or not tool.description:
+                    print(f"[CHAT AGENT] ⚠️  Warning: Tool {tool_name} has no description")
+
+                valid_tools.append(tool)
+            except Exception as tool_error:
+                tool_name = getattr(tool, 'name', 'unknown')
+                print(f"[CHAT AGENT] ⚠️  Error validating tool {tool_name}: {tool_error}")
+                invalid_tool_names.append(tool_name)
+                invalid_tool_reasons[tool_name] = str(tool_error)
+
+        if invalid_tool_names:
+            print(f"[CHAT AGENT] ⚠️  Filtered out {len(invalid_tool_names)} invalid tools:")
+            for name in invalid_tool_names:
+                reason = invalid_tool_reasons.get(name, "Unknown reason")
+                print(f"    - {name}: {reason}")
+
+        if not valid_tools:
+            print(f"[CHAT AGENT] ⚠️  No valid tools available after filtering")
+            result, _ = _fallback_chat_response(message, history, "No valid tools available")
+            yield result, ""
+            return
+
+        print(f"[CHAT AGENT] ✅ Using {len(valid_tools)} valid tools:")
+        for tool in valid_tools:
+            print(f"    - {tool.name}")
+
+        # Status: Analyzing query
+        yield make_status("🔍 Analyzing your question..."), ""
+
+        # Create system prompt
+        chat_system_prompt = """You are a helpful SOC assistant that answers questions about past security investigations.
+
+You have access to tools that can help you search, analyze, and retrieve information about past security incidents and investigations.
+
+IMPORTANT TOOL USAGE GUIDELINES:
+- For STATISTICS, SUMMARIES, COUNTS, or AGGREGATED DATA: Use get_investigation_statistics tool
+  - This tool supports filtering by alert_type (e.g., 'malware', 'phishing', 'brute_force')
+  - Examples: "malware statistics" → use get_investigation_statistics(alert_type='malware')
+  - Examples: "phishing stats" → use get_investigation_statistics(alert_type='phishing')
+  - Examples: "statistics for the last 7 days" → use get_investigation_statistics(time_range_hours=168)
+
+- For FINDING INDIVIDUAL INCIDENTS: Use search_incidents tool
+  - Use when user wants to see specific incidents, not aggregated data
+
+- For SPECIFIC INCIDENT DETAILS: Use explain_incident tool
+  - Use when user mentions a specific incident ID (e.g., ALT-2024-001)
+
+- For CAMPAIGN DETECTION: Use find_campaigns tool
+  - Use when user asks about coordinated attacks or campaigns
+
+When a user asks a question:
+1. Review the available tools and their descriptions carefully
+2. Select the most appropriate tool(s) based on the user's query
+3. Use the tool(s) to gather the necessary information
+4. Provide a clear, helpful response based on the results
+
+Be concise and specific. Include relevant details from the tool results. If a user asks for statistics about a specific alert type, use get_investigation_statistics with the alert_type parameter."""
+
+        # Create agent
+        llm = get_llm(temperature=0.7)
+        middleware = []
+        use_tool_selector = False
+
+        if use_tool_selector and len(valid_tools) > 5:
+            try:
+                from langchain.agents.middleware import LLMToolSelectorMiddleware
+                selector_llm = get_llm(temperature=0.0)
+                middleware.append(
+                    LLMToolSelectorMiddleware(
+                        model=selector_llm,
+                        max_tools=10,
+                    )
+                )
+                print(f"[CHAT AGENT] Using tool selector middleware ({len(valid_tools)} tools available)")
+            except ImportError:
+                print(f"[CHAT AGENT] LLMToolSelectorMiddleware not available, using all {len(valid_tools)} tools")
+        else:
+            print(f"[CHAT AGENT] Using all {len(valid_tools)} tools directly (tool selector disabled)")
+
+        if middleware:
+            agent = create_agent(
+                model=llm,
+                tools=valid_tools,
+                system_prompt=chat_system_prompt,
+                middleware=middleware
+            )
+        else:
+            agent = create_agent(
+                model=llm,
+                tools=valid_tools,
+                system_prompt=chat_system_prompt
+            )
+
+        # Convert history to messages
+        messages = []
+        for user_msg, bot_msg in history:
+            messages.append(HumanMessage(content=user_msg))
+            messages.append(AIMessage(content=bot_msg))
+        messages.append(HumanMessage(content=message))
+
+        # Status: Searching
+        yield make_status("📊 Searching incident database..."), ""
+
+        # Run agent
+        print(f"[CHAT AGENT] Processing query: {message[:50]}...")
+
+        # Status: Processing
+        yield make_status("🤔 Processing results..."), ""
+
+        result = await agent.ainvoke({"messages": messages})
+
+        # Extract agent response
+        agent_messages = result.get("messages", [])
+        if agent_messages:
+            last_message = agent_messages[-1]
+            if hasattr(last_message, 'content'):
+                bot_response = last_message.content
+            else:
+                bot_response = str(last_message)
+        else:
+            bot_response = "I couldn't generate a response. Please try again."
+
+        # Final response
+        final_history = history + [[message, bot_response]]
+        yield final_history, ""
+
+    except Exception as e:
+        import traceback
+        print(f"[CHAT AGENT] ⚠️  Error: {e}")
+        print(f"[CHAT AGENT] Traceback: {traceback.format_exc()}")
+        result, _ = _fallback_chat_response(message, history, str(e))
+        yield result, ""
 
 
 # ===== Example Usage =====

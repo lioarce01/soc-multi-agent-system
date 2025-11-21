@@ -67,84 +67,16 @@ async def supervisor_node(state: SecurityAgentState) -> Dict[str, Any]:
     """
     print(f"\n[SUPERVISOR] Processing alert: {state['alert_id']}")
 
-    # Search memory for similar past incidents
+    # Memory search is handled by agents via MCP tools
+    # Agents have access to search_incidents, get_investigation_statistics, etc.
     similar_incidents = []
     memory_reasoning = ""
 
-    try:
-        from src.memory.manager import get_memory_manager
+    # Note: Memory search happens through agents with MCP tools
+    # The INVESTIGATION agent will use search_incidents MCP tool
+    print(f"[SUPERVISOR] ℹ️  Memory context will be retrieved by agents via MCP tools")
 
-        print(f"[SUPERVISOR] 🔍 Searching memory for similar incidents...")
-        memory_manager = get_memory_manager()
-        
-        # Debug: Check if memory manager is initialized
-        if memory_manager.incident_db is None:
-            print(f"[SUPERVISOR] ⚠️  Memory database not initialized!")
-            print(f"[SUPERVISOR]   - incident_db: {memory_manager.incident_db}")
-            print(f"[SUPERVISOR]   - embeddings: {memory_manager.embeddings is not None}")
-        else:
-            print(f"[SUPERVISOR] ✅ Memory database initialized")
-            print(f"[SUPERVISOR]   - DB type: {type(memory_manager.incident_db).__name__}")
-            # Try to get collection count
-            try:
-                collection = memory_manager.incident_db._collection
-                count = collection.count()
-                print(f"[SUPERVISOR]   - Incidents in database: {count}")
-            except Exception as count_error:
-                print(f"[SUPERVISOR]   - Could not get count: {count_error}")
-        
-        similar_incidents = await memory_manager.find_similar_incidents(
-            current_alert=state["alert_data"],
-            k=3,
-            min_similarity=0.7
-        )
-
-        print(f"[SUPERVISOR] 🔍 Search completed: found {len(similar_incidents)} similar incidents")
-        
-        if similar_incidents:
-            print(f"[SUPERVISOR] 🔍 Found {len(similar_incidents)} similar past incidents:")
-            for incident in similar_incidents:
-                print(f"  - {incident['incident_id']}: {incident['similarity_score']:.0%} similar ({incident['alert_type']})")
-        else:
-            print(f"[SUPERVISOR] ℹ️  No similar incidents found (database may be empty or similarity threshold too high)")
-
-            # Generate LLM reasoning about similarities
-            try:
-                from src.llm_factory import get_llm
-                import json
-
-                llm = get_llm()
-
-                reasoning_prompt = f"""You are a SOC analyst reviewing past security incidents.
-
-Current alert being investigated:
-{json.dumps(state["alert_data"], indent=2)}
-
-Similar past incidents found in memory:
-{json.dumps(similar_incidents, indent=2)}
-
-Explain in 3-4 concise sentences:
-1. Why these past incidents are similar to the current alert
-2. What common patterns or indicators you notice
-3. How this historical context will help the current investigation
-
-Focus on actionable insights. Be specific about shared attributes like IPs, attack techniques, or behaviors."""
-
-                print(f"[SUPERVISOR] 💭 Generating memory reasoning with LLM...")
-                response = await llm.ainvoke(reasoning_prompt)
-                memory_reasoning = response.content
-
-                print(f"[SUPERVISOR] ✅ Memory reasoning generated")
-
-            except Exception as llm_error:
-                print(f"[SUPERVISOR] ⚠️  Could not generate memory reasoning: {llm_error}")
-                memory_reasoning = f"Found {len(similar_incidents)} similar past incidents, but could not generate detailed reasoning."
-
-    except Exception as e:
-        print(f"[SUPERVISOR] ⚠️  Error searching memory: {e}")
-        print(f"[SUPERVISOR] Continuing without memory context")
-
-    # Campaign Detection: If 3+ similar incidents found, detect campaign
+    # Campaign detection will also be handled by agents via MCP find_campaigns tool
     campaign_info = None
     if len(similar_incidents) >= 3:
         try:
@@ -1297,69 +1229,87 @@ Session: {state.get('session_id', 'unknown')}
 
 async def memory_save_node(state: SecurityAgentState) -> Dict[str, Any]:
     """
-    Memory Save - Save investigation to long-term memory and detect campaigns
+    Memory Save - Save investigation via MCP agent and detect campaigns
+    Uses agent to call MCP save_incident and find_campaigns tools
     """
-    print(f"\n[MEMORY] Saving investigation results...")
+    print(f"\n[MEMORY] Saving investigation results via MCP agent...")
+
+    incident_id = state.get("alert_id", "UNKNOWN")
+    campaign_info = None
 
     try:
-        from src.memory.manager import get_memory_manager
+        # Use agent to save incident and detect campaigns via MCP tools
+        from src.agents.single_agent import create_security_agent
+        from langchain_core.messages import HumanMessage
+        import json
 
-        memory_manager = get_memory_manager()
-        
-        # Initialize playbooks if not already done (one-time initialization)
-        try:
-            from src.memory.playbooks import initialize_playbooks
-            # Check if playbooks already exist by trying to retrieve one
-            test_playbook = await memory_manager.get_relevant_playbook("phishing")
-            if test_playbook is None:
-                # Playbooks not initialized yet, initialize them
-                await initialize_playbooks(memory_manager)
-        except Exception as playbook_error:
-            # Playbook initialization is optional, continue if it fails
-            print(f"[MEMORY] ⚠️  Playbook initialization skipped: {playbook_error}")
+        agent = await create_security_agent()
 
-        # Save incident to memory
-        incident_id = await memory_manager.save_incident(
-            user_id="default_user",  # In production: get from authentication context
-            incident_data=dict(state)
-        )
+        # Prepare incident data for saving
+        incident_data = {
+            "alert_id": state.get("alert_id"),
+            "timestamp": state.get("timestamp"),
+            "alert_data": state.get("alert_data", {}),
+            "threat_score": state.get("threat_score", 0.0),
+            "attack_stage": state.get("attack_stage", "Unknown"),
+            "threat_category": state.get("threat_category", "Unknown"),
+            "mitre_mappings": state.get("mitre_mappings", []),
+            "recommendations": state.get("recommendations", []),
+            "report": state.get("report", ""),
+            "workflow_status": "completed"
+        }
 
-        print(f"[MEMORY] ✅ Investigation saved: {incident_id}")
+        # Build save prompt for agent - agent will use MCP save_incident tool
+        save_prompt = f"""Save this completed security investigation to memory for future reference.
 
-        # Check for campaign detection
-        campaign_info = None
-        try:
-            from src.memory.campaign_detector import CampaignDetector
-            
-            campaign_detector = CampaignDetector(time_window_hours=48)
-            campaign_info = await campaign_detector.check_for_campaign(
-                memory_manager=memory_manager,
-                current_incident=dict(state),
-                user_id="default_user"
-            )
-            
-            if campaign_info:
-                print(f"[MEMORY] 🚨 Campaign detected: {campaign_info.get('campaign_id')}")
-            else:
-                print(f"[MEMORY] ℹ️  No campaign detected for this incident")
-        except Exception as campaign_error:
-            print(f"[MEMORY] ⚠️  Campaign detection failed: {campaign_error}")
-            # Continue without campaign info
+Use the save_incident tool with this data:
+{json.dumps(incident_data, indent=2)}
+
+After saving, use find_campaigns tool to check if this incident is part of a larger attack campaign (time_window_hours=48).
+
+Report what was saved and if any campaigns were detected."""
+
+        print(f"[MEMORY] 🤖 Agent saving incident via MCP...")
+
+        result = await agent.ainvoke({
+            "messages": [HumanMessage(content=save_prompt)]
+        })
+
+        # Extract response
+        messages = result.get("messages", [])
+        if messages:
+            final_message = messages[-1]
+            response_text = final_message.content if hasattr(final_message, 'content') else str(final_message)
+            print(f"[MEMORY] ✅ Agent response: {response_text[:200]}...")
+
+            # Check if campaign was detected in response
+            if "campaign" in response_text.lower() and "detected" in response_text.lower():
+                campaign_info = {"detected_by_agent": True, "details": response_text}
+
+        print(f"[MEMORY] ✅ Investigation {incident_id} saved via MCP agent")
 
         return {
             "current_agent": "memory_save",
             "campaign_info": campaign_info,
-            "messages": [AIMessage(content=f"Investigation {incident_id} saved to memory" + (f" - Campaign detected: {campaign_info.get('campaign_id')}" if campaign_info else ""))]
+            "messages": [AIMessage(content=f"Investigation {incident_id} saved to memory via MCP")]
         }
 
     except Exception as e:
-        print(f"[MEMORY] ⚠️  Error saving to memory: {e}")
-        print(f"[MEMORY] Investigation completed without memory persistence")
+        print(f"[MEMORY] ⚠️  Error saving via MCP agent: {e}")
+
+        # Fallback: Save to session store only
+        try:
+            from src.memory.manager import get_memory_manager
+            memory_manager = get_memory_manager()
+            await memory_manager.save_incident_to_session("default_user", dict(state))
+            print(f"[MEMORY] ℹ️  Saved to session store as fallback")
+        except Exception as fallback_error:
+            print(f"[MEMORY] ⚠️  Fallback save failed: {fallback_error}")
 
         return {
             "current_agent": "memory_save",
-            "error": f"Memory save failed: {str(e)}",
-            "messages": [AIMessage(content="Memory save failed, but investigation completed successfully")]
+            "campaign_info": None,
+            "messages": [AIMessage(content=f"Investigation completed (memory save via MCP failed)")]
         }
 
 

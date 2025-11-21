@@ -1,6 +1,13 @@
 """
 Memory Manager for Context Engineering
-Handles long-term incident storage and semantic search
+
+Architecture:
+- Incidents: Handled by LangGraph agents via MCP Memory Server tools
+- Playbooks: Stored locally in ChromaDB
+- LangGraph Store: In-memory for session data
+
+Note: Incident save/search operations are performed by agents using MCP tools
+(save_incident, search_incidents). This class only handles playbooks locally.
 """
 
 from typing import Dict, Any, List, Optional
@@ -20,16 +27,22 @@ except ImportError:
     # Fallback to deprecated packages
     from langchain_community.vectorstores import Chroma
     from langchain_community.embeddings import HuggingFaceEmbeddings
-    print("[MEMORY] ⚠️  Using deprecated langchain-community packages. Install langchain-chroma and langchain-huggingface for better compatibility.")
+    print("[MEMORY] ⚠️  Using deprecated langchain-community packages.")
 
 
 class MemoryManager:
     """
-    Three-tier memory system for security investigations
+    Memory system for security investigations
 
-    1. Short-term: LangGraph State (handled by workflow)
-    2. Long-term: LangGraph Store (this class)
-    3. Semantic: Chroma Vector DB (this class)
+    Architecture:
+    - Incidents: Handled by agents via MCP Memory Server tools
+    - Playbooks: Local ChromaDB (this class)
+    - Session data: LangGraph Store (this class)
+
+    Note: For incidents, agents use MCP tools:
+    - save_incident: Save completed investigation
+    - search_incidents: Find similar past incidents
+    - get_investigation_statistics: Get aggregated stats
     """
 
     def __init__(self, persist_directory: str = "./data/memory"):
@@ -39,18 +52,16 @@ class MemoryManager:
         Args:
             persist_directory: Where to persist memory data
         """
-        # Store persist directory for later reference
         self.persist_directory = persist_directory
-        
-        # Create directory if it doesn't exist
+
+        # Create directory for playbooks
         os.makedirs(persist_directory, exist_ok=True)
-        os.makedirs(f"{persist_directory}/incidents", exist_ok=True)
         os.makedirs(f"{persist_directory}/playbooks", exist_ok=True)
 
-        # Long-term structured storage (LangGraph Store)
+        # Session storage (LangGraph Store)
         self.store = InMemoryStore()
 
-        # Embeddings for semantic search (same as MITRE RAG)
+        # Embeddings for playbook search
         try:
             print(f"[MEMORY] Loading embeddings model...")
             self.embeddings = HuggingFaceEmbeddings(
@@ -59,266 +70,63 @@ class MemoryManager:
             print(f"[MEMORY] ✅ Embeddings loaded")
         except Exception as embed_error:
             print(f"[MEMORY] ❌ Failed to load embeddings: {embed_error}")
-            import traceback
-            print(f"[MEMORY] Traceback: {traceback.format_exc()}")
             self.embeddings = None
-            self.incident_db = None
             self.playbook_db = None
             return
 
-        # Semantic vector stores
+        # Playbook database (local)
         try:
-            print(f"[MEMORY] Initializing Chroma vector stores...")
-            self.incident_db = Chroma(
-                collection_name="past_incidents",
-                embedding_function=self.embeddings,
-                persist_directory=f"{persist_directory}/incidents"
-            )
-            print(f"[MEMORY] ✅ Incident database initialized")
-            
             self.playbook_db = Chroma(
                 collection_name="remediation_playbooks",
                 embedding_function=self.embeddings,
                 persist_directory=f"{persist_directory}/playbooks"
             )
             print(f"[MEMORY] ✅ Playbook database initialized")
-            
-            # Verify connection
-            try:
-                incident_count = self.incident_db._collection.count()
-                print(f"[MEMORY]   - Existing incidents in database: {incident_count}")
-            except Exception as count_error:
-                print(f"[MEMORY]   - Could not get count (may be empty): {count_error}")
-                
         except Exception as chroma_error:
-            print(f"[MEMORY] ❌ Failed to initialize Chroma databases: {chroma_error}")
-            import traceback
-            print(f"[MEMORY] Traceback: {traceback.format_exc()}")
-            self.incident_db = None
+            print(f"[MEMORY] ❌ Failed to initialize playbook database: {chroma_error}")
             self.playbook_db = None
 
         print(f"[MEMORY] Memory Manager initialization complete")
-        print(f"  - LangGraph Store: In-memory")
-        print(f"  - Vector DB: {persist_directory}")
-        print(f"  - Embeddings: sentence-transformers/all-MiniLM-L6-v2")
-        print(f"  - Incident DB: {'✅ Initialized' if self.incident_db else '❌ Failed'}")
-        print(f"  - Playbook DB: {'✅ Initialized' if self.playbook_db else '❌ Failed'}")
+        print(f"  - Session Store: In-memory (LangGraph)")
+        print(f"  - Incidents: Via agents using MCP tools")
+        print(f"  - Playbooks: Local ChromaDB")
+        print(f"  - Playbook DB: {'✅ Ready' if self.playbook_db else '❌ Failed'}")
 
 
-    async def save_incident(
+    async def save_incident_to_session(
         self,
         user_id: str,
         incident_data: Dict[str, Any]
     ) -> str:
         """
-        Save completed investigation to long-term memory
+        Save incident to session store (in-memory)
+        Note: For persistent storage, agents use MCP save_incident tool
 
         Args:
             user_id: User/organization identifier
-            incident_data: Complete investigation result
+            incident_data: Investigation result
 
         Returns:
-            incident_id: Unique identifier for saved incident
+            incident_id
         """
         incident_id = incident_data.get("alert_id", "UNKNOWN")
-        timestamp = incident_data.get("timestamp") or incident_data.get("created_at") or datetime.now().isoformat()
-
-        # Extract alert data safely
+        timestamp = incident_data.get("timestamp", datetime.now().isoformat())
         alert_data = incident_data.get("alert_data", {})
-        alert_type = alert_data.get("type", "unknown")
-        alert_description = alert_data.get("description", "")
 
-        # Extract MITRE techniques
-        mitre_mappings = incident_data.get("mitre_mappings", [])
-        mitre_technique_ids = [
-            m.get("technique_id", "Unknown")
-            for m in mitre_mappings
-        ]
-        mitre_technique_names = [
-            m.get("name", "Unknown")
-            for m in mitre_mappings
-        ]
-
-        # 1. Store structured data in LangGraph Store
         await self.store.aput(
             namespace=(user_id, "incidents"),
             key=incident_id,
             value={
                 "timestamp": timestamp,
-                "alert_type": alert_type,
+                "alert_type": alert_data.get("type", "unknown"),
                 "threat_score": incident_data.get("threat_score", 0.0),
                 "attack_stage": incident_data.get("attack_stage", "Unknown"),
-                "mitre_techniques": mitre_technique_ids,
-                "threat_category": incident_data.get("threat_category", "Unknown"),
-                "remediation_actions": incident_data.get("recommendations", []),
-                "outcome": "investigated",  # Could be: resolved, escalated, false_positive
-                "source_ip": alert_data.get("source_ip"),
-                "destination_ip": alert_data.get("destination_ip"),
                 "workflow_status": incident_data.get("workflow_status", "completed"),
             }
         )
 
-        # 2. Index in vector store for semantic search
-        report_text = incident_data.get("report", "")
-        analysis_reasoning = incident_data.get("analysis_reasoning", "")
-        investigation_findings = incident_data.get("investigation_findings", {})
-
-        # Build searchable content
-        content_parts = [
-            f"Alert Type: {alert_type}",
-            f"Description: {alert_description}",
-            f"Attack Stage: {incident_data.get('attack_stage', 'Unknown')}",
-            f"Threat Category: {incident_data.get('threat_category', 'Unknown')}",
-            f"MITRE Techniques: {', '.join(mitre_technique_names)}",
-            f"Threat Score: {incident_data.get('threat_score', 0.0):.2f}",
-        ]
-
-        # Add analysis reasoning if available
-        if analysis_reasoning:
-            content_parts.append(f"Analysis: {analysis_reasoning[:300]}")
-
-        # Add investigation findings if available
-        if investigation_findings:
-            root_cause = investigation_findings.get("root_cause", "")
-            if root_cause:
-                content_parts.append(f"Root Cause: {root_cause}")
-
-        # Add report excerpt
-        if report_text:
-            content_parts.append(f"Report: {report_text[:500]}")
-
-        document = Document(
-            page_content="\n".join(content_parts),
-            metadata={
-                "incident_id": incident_id,
-                "timestamp": timestamp,
-                "alert_type": alert_type,
-                "threat_score": incident_data.get("threat_score", 0.0),
-                "attack_stage": incident_data.get("attack_stage", "Unknown"),
-                "threat_category": incident_data.get("threat_category", "Unknown"),
-                "source_ip": alert_data.get("source_ip", "Unknown"),
-            }
-        )
-
-        # Check if database is initialized before saving
-        if self.incident_db is None:
-            print(f"[MEMORY] ⚠️  Cannot save incident: incident_db is None")
-            print(f"[MEMORY] ⚠️  Incident {incident_id} will not be searchable")
-            return incident_id
-
-        # Check for duplicate incident_id before inserting
-        try:
-            existing = self.incident_db._collection.get(
-                where={"incident_id": incident_id}
-            )
-            if existing and existing.get("ids") and len(existing["ids"]) > 0:
-                print(f"[MEMORY] ⚠️  Incident {incident_id} already exists, skipping duplicate")
-                return None  # Return None to indicate duplicate was skipped
-        except Exception as dedup_error:
-            # If dedup check fails, continue with insert (better to have duplicates than lose data)
-            print(f"[MEMORY] ⚠️  Dedup check failed: {dedup_error}, continuing with insert")
-
-        try:
-            self.incident_db.add_documents([document])
-            print(f"[MEMORY] ✅ Saved incident: {incident_id}")
-            print(f"  - Timestamp: {timestamp}")
-            print(f"  - Alert Type: {alert_type}")
-            print(f"  - Threat Score: {incident_data.get('threat_score', 0.0):.2f}")
-            print(f"  - MITRE Techniques: {len(mitre_mappings)}")
-            
-            # Verify it was saved
-            try:
-                collection = self.incident_db._collection
-                count = collection.count()
-                print(f"[MEMORY]   - Total incidents in database: {count}")
-            except Exception as verify_error:
-                print(f"[MEMORY]   - Could not verify save: {verify_error}")
-        except Exception as save_error:
-            print(f"[MEMORY] ⚠️  Error saving to vector store: {save_error}")
-            import traceback
-            print(f"[MEMORY] ⚠️  Traceback: {traceback.format_exc()}")
-
+        print(f"[MEMORY] 📝 Incident {incident_id} saved to session store")
         return incident_id
-
-
-    async def find_similar_incidents(
-        self,
-        current_alert: Dict[str, Any],
-        k: int = 3,
-        min_similarity: float = 0.6
-    ) -> List[Dict[str, Any]]:
-        """
-        Find similar past incidents using semantic search
-
-        Args:
-            current_alert: Current alert being investigated
-            k: Number of similar incidents to retrieve
-            min_similarity: Minimum similarity score (0-1)
-
-        Returns:
-            List of similar incidents with metadata
-        """
-        # Build query from current alert
-        query_parts = [
-            f"Alert Type: {current_alert.get('type', 'unknown')}",
-            f"Description: {current_alert.get('description', '')}",
-        ]
-
-        if current_alert.get("source_ip"):
-            query_parts.append(f"Source IP: {current_alert['source_ip']}")
-
-        if current_alert.get("destination_ip"):
-            query_parts.append(f"Destination IP: {current_alert['destination_ip']}")
-
-        query = "\n".join(query_parts)
-
-        # Check if database is initialized
-        if self.incident_db is None:
-            print(f"[MEMORY] ⚠️  Cannot search: incident_db is None")
-            return []
-        
-        # Search vector store
-        try:
-            print(f"[MEMORY] 🔍 Searching with query: {query[:100]}...")
-            results = self.incident_db.similarity_search_with_score(
-                query,
-                k=k
-            )
-            print(f"[MEMORY] 🔍 Search returned {len(results)} results")
-        except Exception as e:
-            print(f"[MEMORY] ⚠️  Error searching incidents: {e}")
-            import traceback
-            print(f"[MEMORY] ⚠️  Traceback: {traceback.format_exc()}")
-            return []
-
-        # Filter by similarity and format
-        similar_incidents = []
-        for doc, score in results:
-            # Convert distance to similarity (lower distance = higher similarity)
-            # Chroma uses L2 distance, so we need to convert
-            similarity = 1.0 / (1.0 + score)  # Normalize distance to 0-1 similarity
-
-            if similarity >= min_similarity:
-                similar_incidents.append({
-                    "incident_id": doc.metadata.get("incident_id", "Unknown"),
-                    "similarity_score": round(similarity, 3),
-                    "alert_type": doc.metadata.get("alert_type", "unknown"),
-                    "threat_score": doc.metadata.get("threat_score", 0.0),
-                    "attack_stage": doc.metadata.get("attack_stage", "Unknown"),
-                    "threat_category": doc.metadata.get("threat_category", "Unknown"),
-                    "timestamp": doc.metadata.get("timestamp", "Unknown"),
-                    "source_ip": doc.metadata.get("source_ip", "Unknown"),
-                    "summary": doc.page_content[:200] + "..."  # First 200 chars
-                })
-
-        if similar_incidents:
-            print(f"[MEMORY] 🔍 Found {len(similar_incidents)} similar past incidents:")
-            for incident in similar_incidents:
-                print(f"  - {incident['incident_id']}: {incident['similarity_score']:.0%} similar ({incident['alert_type']})")
-        else:
-            print(f"[MEMORY] ℹ️  No similar incidents found (threshold: {min_similarity:.0%})")
-
-        return similar_incidents
 
 
     async def get_incident_by_id(
