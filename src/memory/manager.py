@@ -9,9 +9,18 @@ import json
 import os
 
 from langgraph.store.memory import InMemoryStore
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
+
+# Try to use newer packages first, fallback to deprecated ones
+try:
+    from langchain_chroma import Chroma
+    from langchain_huggingface import HuggingFaceEmbeddings
+    print("[MEMORY] Using langchain-chroma and langchain-huggingface (recommended)")
+except ImportError:
+    # Fallback to deprecated packages
+    from langchain_community.vectorstores import Chroma
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+    print("[MEMORY] ⚠️  Using deprecated langchain-community packages. Install langchain-chroma and langchain-huggingface for better compatibility.")
 
 
 class MemoryManager:
@@ -30,6 +39,9 @@ class MemoryManager:
         Args:
             persist_directory: Where to persist memory data
         """
+        # Store persist directory for later reference
+        self.persist_directory = persist_directory
+        
         # Create directory if it doesn't exist
         os.makedirs(persist_directory, exist_ok=True)
         os.makedirs(f"{persist_directory}/incidents", exist_ok=True)
@@ -39,27 +51,58 @@ class MemoryManager:
         self.store = InMemoryStore()
 
         # Embeddings for semantic search (same as MITRE RAG)
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
+        try:
+            print(f"[MEMORY] Loading embeddings model...")
+            self.embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
+            )
+            print(f"[MEMORY] ✅ Embeddings loaded")
+        except Exception as embed_error:
+            print(f"[MEMORY] ❌ Failed to load embeddings: {embed_error}")
+            import traceback
+            print(f"[MEMORY] Traceback: {traceback.format_exc()}")
+            self.embeddings = None
+            self.incident_db = None
+            self.playbook_db = None
+            return
 
         # Semantic vector stores
-        self.incident_db = Chroma(
-            collection_name="past_incidents",
-            embedding_function=self.embeddings,
-            persist_directory=f"{persist_directory}/incidents"
-        )
+        try:
+            print(f"[MEMORY] Initializing Chroma vector stores...")
+            self.incident_db = Chroma(
+                collection_name="past_incidents",
+                embedding_function=self.embeddings,
+                persist_directory=f"{persist_directory}/incidents"
+            )
+            print(f"[MEMORY] ✅ Incident database initialized")
+            
+            self.playbook_db = Chroma(
+                collection_name="remediation_playbooks",
+                embedding_function=self.embeddings,
+                persist_directory=f"{persist_directory}/playbooks"
+            )
+            print(f"[MEMORY] ✅ Playbook database initialized")
+            
+            # Verify connection
+            try:
+                incident_count = self.incident_db._collection.count()
+                print(f"[MEMORY]   - Existing incidents in database: {incident_count}")
+            except Exception as count_error:
+                print(f"[MEMORY]   - Could not get count (may be empty): {count_error}")
+                
+        except Exception as chroma_error:
+            print(f"[MEMORY] ❌ Failed to initialize Chroma databases: {chroma_error}")
+            import traceback
+            print(f"[MEMORY] Traceback: {traceback.format_exc()}")
+            self.incident_db = None
+            self.playbook_db = None
 
-        self.playbook_db = Chroma(
-            collection_name="remediation_playbooks",
-            embedding_function=self.embeddings,
-            persist_directory=f"{persist_directory}/playbooks"
-        )
-
-        print(f"[MEMORY] Memory Manager initialized")
+        print(f"[MEMORY] Memory Manager initialization complete")
         print(f"  - LangGraph Store: In-memory")
         print(f"  - Vector DB: {persist_directory}")
         print(f"  - Embeddings: sentence-transformers/all-MiniLM-L6-v2")
+        print(f"  - Incident DB: {'✅ Initialized' if self.incident_db else '❌ Failed'}")
+        print(f"  - Playbook DB: {'✅ Initialized' if self.playbook_db else '❌ Failed'}")
 
 
     async def save_incident(
@@ -157,13 +200,43 @@ class MemoryManager:
             }
         )
 
-        self.incident_db.add_documents([document])
+        # Check if database is initialized before saving
+        if self.incident_db is None:
+            print(f"[MEMORY] ⚠️  Cannot save incident: incident_db is None")
+            print(f"[MEMORY] ⚠️  Incident {incident_id} will not be searchable")
+            return incident_id
 
-        print(f"[MEMORY] ✅ Saved incident: {incident_id}")
-        print(f"  - Timestamp: {timestamp}")
-        print(f"  - Alert Type: {alert_type}")
-        print(f"  - Threat Score: {incident_data.get('threat_score', 0.0):.2f}")
-        print(f"  - MITRE Techniques: {len(mitre_mappings)}")
+        # Check for duplicate incident_id before inserting
+        try:
+            existing = self.incident_db._collection.get(
+                where={"incident_id": incident_id}
+            )
+            if existing and existing.get("ids") and len(existing["ids"]) > 0:
+                print(f"[MEMORY] ⚠️  Incident {incident_id} already exists, skipping duplicate")
+                return None  # Return None to indicate duplicate was skipped
+        except Exception as dedup_error:
+            # If dedup check fails, continue with insert (better to have duplicates than lose data)
+            print(f"[MEMORY] ⚠️  Dedup check failed: {dedup_error}, continuing with insert")
+
+        try:
+            self.incident_db.add_documents([document])
+            print(f"[MEMORY] ✅ Saved incident: {incident_id}")
+            print(f"  - Timestamp: {timestamp}")
+            print(f"  - Alert Type: {alert_type}")
+            print(f"  - Threat Score: {incident_data.get('threat_score', 0.0):.2f}")
+            print(f"  - MITRE Techniques: {len(mitre_mappings)}")
+            
+            # Verify it was saved
+            try:
+                collection = self.incident_db._collection
+                count = collection.count()
+                print(f"[MEMORY]   - Total incidents in database: {count}")
+            except Exception as verify_error:
+                print(f"[MEMORY]   - Could not verify save: {verify_error}")
+        except Exception as save_error:
+            print(f"[MEMORY] ⚠️  Error saving to vector store: {save_error}")
+            import traceback
+            print(f"[MEMORY] ⚠️  Traceback: {traceback.format_exc()}")
 
         return incident_id
 
@@ -199,14 +272,23 @@ class MemoryManager:
 
         query = "\n".join(query_parts)
 
+        # Check if database is initialized
+        if self.incident_db is None:
+            print(f"[MEMORY] ⚠️  Cannot search: incident_db is None")
+            return []
+        
         # Search vector store
         try:
+            print(f"[MEMORY] 🔍 Searching with query: {query[:100]}...")
             results = self.incident_db.similarity_search_with_score(
                 query,
                 k=k
             )
+            print(f"[MEMORY] 🔍 Search returned {len(results)} results")
         except Exception as e:
             print(f"[MEMORY] ⚠️  Error searching incidents: {e}")
+            import traceback
+            print(f"[MEMORY] ⚠️  Traceback: {traceback.format_exc()}")
             return []
 
         # Filter by similarity and format
@@ -462,5 +544,7 @@ def get_memory_manager() -> MemoryManager:
 
     if _memory_manager is None:
         _memory_manager = MemoryManager()
+        # Note: Playbooks will be initialized on-demand or can be initialized manually
+        # See src/memory/playbooks.py for initialization function
 
     return _memory_manager

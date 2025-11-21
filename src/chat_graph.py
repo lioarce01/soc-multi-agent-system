@@ -3,7 +3,7 @@ LangGraph Chat Workflow for Q&A Interface (Streaming Mode)
 Token-by-token streaming for conversational interactions
 """
 
-from typing import Dict, Any, AsyncGenerator
+from typing import Dict, Any, AsyncGenerator, List, Optional
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
@@ -281,7 +281,7 @@ async def chat_with_history(
     history: list
 ) -> tuple:
     """
-    Chat function for Gradio that queries historical investigations
+    Chat function for Gradio that uses an agent to infer and call MCP tools
     
     Args:
         message: User message
@@ -290,125 +290,239 @@ async def chat_with_history(
     Returns:
         Tuple of (updated_history, "")
     """
-    from src.memory.manager import get_memory_manager
+    from src.mcp_integration import MCPClientManager
     from src.llm_factory import get_llm
-    import json
-    import re
-    
-    # Initialize memory manager and LLM
-    memory_manager = get_memory_manager()
-    llm = get_llm(temperature=0.7)
-    
-    # Convert history to messages format
-    messages = []
-    for user_msg, bot_msg in history:
-        messages.append(HumanMessage(content=user_msg))
-        messages.append(AIMessage(content=bot_msg))
-    
-    # Add current message
-    messages.append(HumanMessage(content=message))
-    
-    # Classify intent
-    intent_prompt = f"""Classify this user query into one of these categories:
-
-Query: "{message}"
-
-Categories:
-- search_incidents: User wants to search/filter past incidents
-- get_statistics: User wants aggregated metrics/stats
-- explain_incident: User wants details about a specific incident
-- find_campaigns: User wants to know about campaigns
-- general: General question about the system
-
-Return only the category name."""
+    from langchain.agents import create_agent
+    from langchain_core.messages import HumanMessage, AIMessage
     
     try:
-        intent_response = await llm.ainvoke(intent_prompt)
-        intent = intent_response.content.strip().lower()
-    except:
-        intent = "general"
-    
-    # Search memory based on intent
-    search_results = []
-    
-    if intent == "search_incidents":
-        # Semantic search in incident database
+        # Initialize MCP client and get memory tools
+        mcp_manager = MCPClientManager()
         try:
-            similar = await memory_manager.find_similar_incidents(
-                current_alert={"description": message},
-                k=5,
-                min_similarity=0.3
-            )
-            search_results = similar
-        except Exception as e:
-            print(f"[CHAT] Error searching incidents: {e}")
-    
-    elif intent == "get_statistics":
-        # Get stats
+            await mcp_manager.initialize()
+        except Exception as init_error:
+            print(f"[CHAT AGENT] ⚠️  MCP initialization failed: {init_error}")
+            print(f"[CHAT AGENT] Make sure Memory MCP server is running on port 8003")
+            return _fallback_chat_response(message, history, str(init_error))
+        
+        # Get all tools from MCP - agent will infer which to use based on descriptions
         try:
-            # Extract time range from message (default: 7 days)
-            time_range = 168  # hours
-            if "last week" in message.lower() or "7 days" in message.lower():
-                time_range = 168
-            elif "last 24 hours" in message.lower() or "today" in message.lower():
-                time_range = 24
-            elif "last month" in message.lower() or "30 days" in message.lower():
-                time_range = 720
-            
-            stats = await memory_manager.get_statistics(
-                user_id="default_user",
-                time_range_hours=time_range
-            )
-            search_results = [stats]
-        except Exception as e:
-            print(f"[CHAT] Error getting statistics: {e}")
-    
-    elif intent == "explain_incident":
-        # Extract incident ID from query
-        match = re.search(r'ALT-[\d-]+', message.upper())
-        if match:
-            incident_id = match.group(0)
+            all_tools = await mcp_manager.get_tools()
+        except Exception as tools_error:
+            print(f"[CHAT AGENT] ⚠️  Failed to get tools: {tools_error}")
+            return _fallback_chat_response(message, history, str(tools_error))
+        
+        if not all_tools:
+            print(f"[CHAT AGENT] ⚠️  No tools available from MCP servers")
+            print(f"[CHAT AGENT] Check that Memory MCP server (port 8003) and SIEM MCP server (port 8001) are running")
+            return _fallback_chat_response(message, history, "No tools available")
+        
+        # Log all tools received for debugging
+        print(f"[CHAT AGENT] 📋 Received {len(all_tools)} tools from MCP:")
+        for tool in all_tools:
+            tool_name = getattr(tool, 'name', 'NO_NAME')
+            tool_desc = getattr(tool, 'description', 'NO_DESC')[:50] if hasattr(tool, 'description') else 'NO_DESC'
+            print(f"  - {tool_name}: {tool_desc}...")
+        
+        # Filter out invalid tools (like 'default_api' or tools without proper schemas)
+        valid_tools = []
+        invalid_tool_names = []
+        invalid_tool_reasons = {}
+        
+        for tool in all_tools:
             try:
-                incident = await memory_manager.get_incident_by_id(
-                    user_id="default_user",
-                    incident_id=incident_id
+                tool_name = getattr(tool, 'name', None)
+                
+                # Validate tool has required attributes
+                if not tool_name or tool_name == '':
+                    invalid_tool_names.append("unnamed_tool")
+                    invalid_tool_reasons["unnamed_tool"] = "No name attribute"
+                    continue
+                
+                # Skip invalid tool names (more comprehensive list)
+                invalid_names = ['default_api', '', 'api', 'default', 'tool', 'function']
+                if tool_name in invalid_names or tool_name.startswith('_') or tool_name.startswith('__'):
+                    invalid_tool_names.append(tool_name)
+                    invalid_tool_reasons[tool_name] = f"Invalid name pattern"
+                    continue
+                
+                # Validate tool has a callable or invoke method
+                if not (hasattr(tool, 'invoke') or hasattr(tool, 'ainvoke') or hasattr(tool, '__call__')):
+                    invalid_tool_names.append(tool_name)
+                    invalid_tool_reasons[tool_name] = "No invoke/ainvoke method"
+                    continue
+                
+                # Additional validation: check if tool has description (helps with agent selection)
+                if not hasattr(tool, 'description') or not tool.description:
+                    print(f"[CHAT AGENT] ⚠️  Warning: Tool {tool_name} has no description")
+                
+                valid_tools.append(tool)
+            except Exception as tool_error:
+                tool_name = getattr(tool, 'name', 'unknown')
+                print(f"[CHAT AGENT] ⚠️  Error validating tool {tool_name}: {tool_error}")
+                invalid_tool_names.append(tool_name)
+                invalid_tool_reasons[tool_name] = str(tool_error)
+        
+        if invalid_tool_names:
+            print(f"[CHAT AGENT] ⚠️  Filtered out {len(invalid_tool_names)} invalid tools:")
+            for name in invalid_tool_names:
+                reason = invalid_tool_reasons.get(name, "Unknown reason")
+                print(f"    - {name}: {reason}")
+        
+        if not valid_tools:
+            print(f"[CHAT AGENT] ⚠️  No valid tools available after filtering")
+            return _fallback_chat_response(message, history, "No valid tools available")
+        
+        print(f"[CHAT AGENT] ✅ Using {len(valid_tools)} valid tools:")
+        for tool in valid_tools:
+            print(f"    - {tool.name}")
+        
+        # Create system prompt for chat agent (generic, no hardcoded tool names)
+        chat_system_prompt = """You are a helpful SOC assistant that answers questions about past security investigations.
+
+You have access to tools that can help you search, analyze, and retrieve information about past security incidents and investigations.
+
+IMPORTANT TOOL USAGE GUIDELINES:
+- For STATISTICS, SUMMARIES, COUNTS, or AGGREGATED DATA: Use get_investigation_statistics tool
+  - This tool supports filtering by alert_type (e.g., 'malware', 'phishing', 'brute_force')
+  - Examples: "malware statistics" → use get_investigation_statistics(alert_type='malware')
+  - Examples: "phishing stats" → use get_investigation_statistics(alert_type='phishing')
+  - Examples: "statistics for the last 7 days" → use get_investigation_statistics(time_range_hours=168)
+
+- For FINDING INDIVIDUAL INCIDENTS: Use search_incidents tool
+  - Use when user wants to see specific incidents, not aggregated data
+
+- For SPECIFIC INCIDENT DETAILS: Use explain_incident tool
+  - Use when user mentions a specific incident ID (e.g., ALT-2024-001)
+
+- For CAMPAIGN DETECTION: Use find_campaigns tool
+  - Use when user asks about coordinated attacks or campaigns
+
+When a user asks a question:
+1. Review the available tools and their descriptions carefully
+2. Select the most appropriate tool(s) based on the user's query
+3. Use the tool(s) to gather the necessary information
+4. Provide a clear, helpful response based on the results
+
+Be concise and specific. Include relevant details from the tool results. If a user asks for statistics about a specific alert type, use get_investigation_statistics with the alert_type parameter."""
+        
+        # Create agent with MCP tools using langchain.agents
+        # Agent will automatically discover and use appropriate tools based on descriptions
+        llm = get_llm(temperature=0.7)
+        
+        # Optionally use LLM tool selector middleware for better performance with many tools
+        # This pre-filters tools before the main agent sees them
+        # NOTE: Disabled for now due to 'default_api' selection issue
+        # The middleware seems to be selecting tools that don't exist in valid_tool_names
+        middleware = []
+        
+        # Only use tool selector if we have many tools AND we're confident in tool names
+        # For now, let's skip it to avoid the 'default_api' issue
+        use_tool_selector = False  # Disabled until we fix the 'default_api' issue
+        
+        if use_tool_selector and len(valid_tools) > 5:
+            try:
+                from langchain.agents.middleware import LLMToolSelectorMiddleware
+                # Use a cheaper/faster model for tool selection if available
+                selector_llm = get_llm(temperature=0.0)  # Lower temp for selection
+                middleware.append(
+                    LLMToolSelectorMiddleware(
+                        model=selector_llm,
+                        max_tools=10,  # Limit to most relevant tools
+                    )
                 )
-                if incident:
-                    search_results = [incident]
-            except Exception as e:
-                print(f"[CHAT] Error retrieving incident: {e}")
-    
-    elif intent == "find_campaigns":
-        # Get all incidents and look for patterns
-        try:
-            all_incidents = await memory_manager.get_all_incidents(
-                user_id="default_user",
-                limit=50
+                print(f"[CHAT AGENT] Using tool selector middleware ({len(valid_tools)} tools available)")
+            except ImportError:
+                print(f"[CHAT AGENT] LLMToolSelectorMiddleware not available, using all {len(valid_tools)} tools")
+        else:
+            print(f"[CHAT AGENT] Using all {len(valid_tools)} tools directly (tool selector disabled)")
+        
+        # Create agent - middleware is passed only if available
+        if middleware:
+            agent = create_agent(
+                model=llm,
+                tools=valid_tools,
+                system_prompt=chat_system_prompt,
+                middleware=middleware
             )
-            search_results = all_incidents
-        except Exception as e:
-            print(f"[CHAT] Error finding campaigns: {e}")
-    
-    # Generate response
-    response_prompt = f"""You are a helpful SOC assistant answering questions about past security investigations.
-
-User Query: "{message}"
-
-Search Results:
-{json.dumps(search_results, indent=2, default=str)}
-
-Generate a helpful, concise response (3-5 sentences). Include specific details from the search results.
-If no results found, explain that politely."""
-    
-    try:
-        response = await llm.ainvoke(response_prompt)
-        bot_response = response.content
+        else:
+            agent = create_agent(
+                model=llm,
+                tools=valid_tools,
+                system_prompt=chat_system_prompt
+            )
+        
+        # Convert history to messages
+        messages = []
+        for user_msg, bot_msg in history:
+            messages.append(HumanMessage(content=user_msg))
+            messages.append(AIMessage(content=bot_msg))
+        
+        # Add current user message
+        messages.append(HumanMessage(content=message))
+        
+        # Run agent - it will infer which tool to use
+        print(f"[CHAT AGENT] Processing query: {message[:50]}...")
+        result = await agent.ainvoke({"messages": messages})
+        
+        # Extract agent response
+        agent_messages = result.get("messages", [])
+        if agent_messages:
+            last_message = agent_messages[-1]
+            if hasattr(last_message, 'content'):
+                bot_response = last_message.content
+            else:
+                bot_response = str(last_message)
+        else:
+            bot_response = "I couldn't generate a response. Please try again."
+        
+        # Update history
+        history.append([message, bot_response])
+        
+        return history, ""
+        
     except Exception as e:
-        bot_response = f"I encountered an error processing your query: {str(e)}"
+        import traceback
+        print(f"[CHAT AGENT] ⚠️  Error: {e}")
+        print(f"[CHAT AGENT] Traceback: {traceback.format_exc()}")
+        # Fallback to simple response
+        return _fallback_chat_response(message, history, str(e))
+
+
+def _fallback_chat_response(message: str, history: list, error_detail: str = None) -> tuple:
+    """
+    Fallback chat response when MCP tools are unavailable
     
-    # Update history
+    Args:
+        message: User message
+        history: Chat history
+        error_detail: Optional error details for better diagnostics
+    
+    Returns:
+        Tuple of (updated_history, "")
+    """
+    error_msg = error_detail or "MCP connection failed"
+    
+    # Provide helpful error message with instructions
+    bot_response = f"""I'm sorry, but the investigation history tools are currently unavailable.
+
+**Error:** {error_msg}
+
+**To fix this:**
+1. Make sure the Memory MCP server is running:
+   ```bash
+   cd mcp_servers
+   python memory_server.py
+   ```
+   The server should start on http://localhost:8003
+
+2. Also ensure the SIEM MCP server is running (port 8001) if you want to use investigation features.
+
+3. Check that the servers are accessible and not blocked by firewall.
+
+Once the servers are running, please try your question again."""
+    
     history.append([message, bot_response])
-    
     return history, ""
 
 

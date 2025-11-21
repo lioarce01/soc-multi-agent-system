@@ -37,6 +37,10 @@ def get_mcp_server_config() -> Dict[str, Dict[str, Any]]:
             "threat_intel": {
                 "transport": "streamable_http",
                 "url": "http://threat-intel-mcp:8002/mcp"
+            },
+            "memory": {
+                "transport": "streamable_http",
+                "url": "http://memory-mcp:8003/mcp"
             }
         }
     else:
@@ -49,7 +53,11 @@ def get_mcp_server_config() -> Dict[str, Dict[str, Any]]:
                     "Authorization": f"Bearer {Config.SIEM_API_KEY}" if Config.SIEM_API_KEY else ""
                 }
             },
-            # Note: Only SIEM server for now, will add threat_intel later
+            "memory": {
+                "transport": "streamable_http",
+                "url": "http://localhost:8003/mcp"
+            }
+            # Note: Only SIEM and memory servers for now
             # "threat_intel": {
             #     "transport": "streamable_http",
             #     "url": "http://localhost:8002/mcp"
@@ -222,7 +230,10 @@ async def get_siem_events(
     limit: int = 100
 ) -> Dict[str, Any]:
     """
-    Query SIEM for events (convenience wrapper)
+    Query SIEM for events (DEPRECATED: Use agent-based tool discovery instead)
+    
+    This convenience wrapper directly invokes tools by name, which bypasses agent discovery.
+    Prefer using agents that discover tools based on descriptions.
 
     Args:
         source_ip: Filter by source IP
@@ -234,6 +245,12 @@ async def get_siem_events(
     Returns:
         SIEM query results
     """
+    import warnings
+    warnings.warn(
+        "get_siem_events() is deprecated. Use agent-based tool discovery instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     manager = MCPClientManager()
     return await manager.invoke_tool(
         "query_siem",
@@ -247,7 +264,10 @@ async def get_siem_events(
 
 async def get_ip_threat_intel(ip_address: str) -> Dict[str, Any]:
     """
-    Get threat intelligence for IP address (convenience wrapper)
+    Get threat intelligence for IP address (DEPRECATED: Use agent-based tool discovery instead)
+    
+    This convenience wrapper directly invokes tools by name, which bypasses agent discovery.
+    Prefer using agents that discover tools based on descriptions.
 
     Args:
         ip_address: IP to look up
@@ -255,13 +275,22 @@ async def get_ip_threat_intel(ip_address: str) -> Dict[str, Any]:
     Returns:
         Threat intelligence data
     """
+    import warnings
+    warnings.warn(
+        "get_ip_threat_intel() is deprecated. Use agent-based tool discovery instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     manager = MCPClientManager()
     return await manager.invoke_tool("get_threat_intel", ip_address=ip_address)
 
 
 async def get_user_security_events(username: str, time_range: str = "last_7d") -> Dict[str, Any]:
     """
-    Get user security events (convenience wrapper)
+    Get user security events (DEPRECATED: Use agent-based tool discovery instead)
+    
+    This convenience wrapper directly invokes tools by name, which bypasses agent discovery.
+    Prefer using agents that discover tools based on descriptions.
 
     Args:
         username: Username to look up
@@ -270,13 +299,22 @@ async def get_user_security_events(username: str, time_range: str = "last_7d") -
     Returns:
         User activity data
     """
+    import warnings
+    warnings.warn(
+        "get_user_security_events() is deprecated. Use agent-based tool discovery instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     manager = MCPClientManager()
     return await manager.invoke_tool("get_user_events", username=username, time_range=time_range)
 
 
 async def get_endpoint_security_data(hostname: str) -> Dict[str, Any]:
     """
-    Get endpoint security data (convenience wrapper)
+    Get endpoint security data (DEPRECATED: Use agent-based tool discovery instead)
+    
+    This convenience wrapper directly invokes tools by name, which bypasses agent discovery.
+    Prefer using agents that discover tools based on descriptions.
 
     Args:
         hostname: Hostname to query
@@ -284,6 +322,12 @@ async def get_endpoint_security_data(hostname: str) -> Dict[str, Any]:
     Returns:
         Endpoint security information
     """
+    import warnings
+    warnings.warn(
+        "get_endpoint_security_data() is deprecated. Use agent-based tool discovery instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     manager = MCPClientManager()
     return await manager.invoke_tool("get_endpoint_data", hostname=hostname)
 

@@ -11,6 +11,54 @@ from src.state import SecurityAgentState, create_initial_state
 from src.config import Config
 
 
+# ===== Auto-Compaction Helper =====
+
+async def check_and_compact_messages(state: SecurityAgentState) -> SecurityAgentState:
+    """
+    Check if message compaction is needed and apply if necessary
+    
+    Args:
+        state: Current state
+    
+    Returns:
+        Updated state with compacted messages if needed
+    """
+    from src.memory.compaction import should_compact, auto_compact_messages
+    from src.llm_factory import get_llm
+    
+    messages = state.get("messages", [])
+    
+    if not messages:
+        return state
+    
+    # Check if compaction needed
+    if should_compact(messages, max_tokens=100000):
+        print(f"[COMPACTION] ⚠️  Message history approaching token limit, compacting...")
+        
+        try:
+            # Get LLM for intelligent summarization
+            llm = get_llm(temperature=0.3)
+            
+            # Compact messages
+            compacted_messages = await auto_compact_messages(
+                messages=messages,
+                keep_recent=5,
+                llm=llm
+            )
+            
+            # Update state
+            return {
+                **state,
+                "messages": compacted_messages,
+                "context_compacted": True
+            }
+        except Exception as e:
+            print(f"[COMPACTION] ⚠️  Compaction failed: {e}, continuing without compaction")
+            return state
+    
+    return state
+
+
 # ===== Node Functions =====
 
 async def supervisor_node(state: SecurityAgentState) -> Dict[str, Any]:
@@ -26,17 +74,39 @@ async def supervisor_node(state: SecurityAgentState) -> Dict[str, Any]:
     try:
         from src.memory.manager import get_memory_manager
 
+        print(f"[SUPERVISOR] 🔍 Searching memory for similar incidents...")
         memory_manager = get_memory_manager()
+        
+        # Debug: Check if memory manager is initialized
+        if memory_manager.incident_db is None:
+            print(f"[SUPERVISOR] ⚠️  Memory database not initialized!")
+            print(f"[SUPERVISOR]   - incident_db: {memory_manager.incident_db}")
+            print(f"[SUPERVISOR]   - embeddings: {memory_manager.embeddings is not None}")
+        else:
+            print(f"[SUPERVISOR] ✅ Memory database initialized")
+            print(f"[SUPERVISOR]   - DB type: {type(memory_manager.incident_db).__name__}")
+            # Try to get collection count
+            try:
+                collection = memory_manager.incident_db._collection
+                count = collection.count()
+                print(f"[SUPERVISOR]   - Incidents in database: {count}")
+            except Exception as count_error:
+                print(f"[SUPERVISOR]   - Could not get count: {count_error}")
+        
         similar_incidents = await memory_manager.find_similar_incidents(
             current_alert=state["alert_data"],
             k=3,
             min_similarity=0.7
         )
 
+        print(f"[SUPERVISOR] 🔍 Search completed: found {len(similar_incidents)} similar incidents")
+        
         if similar_incidents:
             print(f"[SUPERVISOR] 🔍 Found {len(similar_incidents)} similar past incidents:")
             for incident in similar_incidents:
                 print(f"  - {incident['incident_id']}: {incident['similarity_score']:.0%} similar ({incident['alert_type']})")
+        else:
+            print(f"[SUPERVISOR] ℹ️  No similar incidents found (database may be empty or similarity threshold too high)")
 
             # Generate LLM reasoning about similarities
             try:
@@ -136,7 +206,7 @@ Focus on actionable insights. Be specific about shared attributes like IPs, atta
 async def enrichment_node(state: SecurityAgentState) -> Dict[str, Any]:
     """
     Context Enrichment Agent - Gather data from SIEM, EDR, Threat Intel
-    Uses MCP tools to query external systems
+    Uses agent to discover and use MCP tools automatically
     """
     print(f"\n[ENRICHMENT] Gathering context for alert {state['alert_id']}")
 
@@ -144,121 +214,96 @@ async def enrichment_node(state: SecurityAgentState) -> Dict[str, Any]:
     enrichment_data = {}
 
     try:
-        # Import MCP integration functions
-        from src.mcp_integration import (
-            get_siem_events,
-            get_ip_threat_intel,
-            get_user_security_events,
-            get_endpoint_security_data
-        )
+        # Use agent to discover and use MCP tools
+        from src.agents.single_agent import create_security_agent
+        from langchain_core.messages import HumanMessage
+        import json
 
-        # 1. Query SIEM for related events
-        print(f"  [MCP] Querying SIEM for events from {alert_data.get('source_ip')}")
-        siem_result = await get_siem_events(
-            source_ip=alert_data.get("source_ip"),
-            event_type=alert_data.get("type"),
-            user=alert_data.get("user"),
-            time_range="last_24h",
-            limit=50
-        )
+        # Create agent with MCP tools (agent will discover tools from descriptions)
+        agent = await create_security_agent()
 
-        # Validate result type (MCP tools can return strings on error)
-        if isinstance(siem_result, dict):
-            enrichment_data["siem_logs"] = siem_result.get("events", [])
-            print(f"  [MCP] Found {len(enrichment_data['siem_logs'])} SIEM events")
-        else:
-            print(f"  [MCP] SIEM query returned invalid type: {type(siem_result).__name__}")
-            enrichment_data["siem_logs"] = []
+        # Build enrichment task prompt - agent will discover which tools to use
+        enrichment_prompt = f"""Gather context and enrichment data for this security alert:
 
-        # 2. Get threat intelligence for IP (smart selection of public IP)
-        # Choose the IP to query: prefer public IPs over private IPs
-        def is_private_ip(ip: str) -> bool:
-            """Check if IP is private (RFC 1918)"""
-            if not ip:
-                return True
-            try:
-                parts = ip.split('.')
-                if len(parts) != 4:
-                    return True
-                first = int(parts[0])
-                second = int(parts[1])
-                # Private ranges: 10.x.x.x, 172.16-31.x.x, 192.168.x.x
-                if first == 10:
-                    return True
-                if first == 172 and 16 <= second <= 31:
-                    return True
-                if first == 192 and second == 168:
-                    return True
-                return False
-            except:
-                return True
+Alert ID: {alert_data.get('id', 'Unknown')}
+Alert Type: {alert_data.get('type', 'Unknown')}
+Source IP: {alert_data.get('source_ip', 'N/A')}
+Destination IP: {alert_data.get('destination_ip', 'N/A')}
+User: {alert_data.get('user', 'N/A')}
+Hostname: {alert_data.get('hostname', 'N/A')}
+Timestamp: {alert_data.get('timestamp', 'N/A')}
+Description: {alert_data.get('description', 'N/A')}
 
-        # Select best IP to query
-        source_ip = alert_data.get("source_ip")
-        dest_ip = alert_data.get("destination_ip")
+You need to gather the following information:
+1. SIEM security events related to this alert (source IP, event type, user, last 24 hours)
+2. Threat intelligence for the IP address (if it's a public IP, prefer source_ip over destination_ip)
+3. User activity history (if user is provided, last 7 days)
+4. Endpoint security data (if hostname is provided)
 
-        ip_to_query = None
-        if source_ip and not is_private_ip(source_ip):
-            ip_to_query = source_ip
-        elif dest_ip and not is_private_ip(dest_ip):
-            ip_to_query = dest_ip
-        elif source_ip:
-            ip_to_query = source_ip  # Try anyway
+Review the available tools and their descriptions, then use the appropriate tools to gather this data.
+Return the results in a structured format that includes all the data you collected."""
 
-        if ip_to_query:
-            print(f"  [MCP] Getting threat intel for {ip_to_query}")
-            threat_intel_result = await get_ip_threat_intel(ip_to_query)
+        print(f"  [ENRICHMENT AGENT] Using agent to discover and use MCP tools...")
+        result = await agent.ainvoke({"messages": [HumanMessage(content=enrichment_prompt)]})
 
-            if isinstance(threat_intel_result, dict):
+        # Extract agent's tool usage results from message history
+        agent_messages = result.get("messages", [])
+        
+        # Extract tool results from agent's execution
+        # Tool results come as ToolMessage objects after tool calls
+        from langchain_core.messages import ToolMessage
+        
+        tool_results_by_name = {}
+        for msg in agent_messages:
+            # Check for ToolMessage (tool execution results)
+            if isinstance(msg, ToolMessage):
+                tool_name = getattr(msg, 'name', '')
+                content = msg.content
+                
+                # Parse tool result content
+                if isinstance(content, dict):
+                    tool_results_by_name[tool_name] = content
+                elif isinstance(content, str):
+                    try:
+                        parsed = json.loads(content)
+                        if isinstance(parsed, dict):
+                            tool_results_by_name[tool_name] = parsed
+                        else:
+                            tool_results_by_name[tool_name] = {"raw": parsed}
+                    except:
+                        # Not JSON, store as raw text
+                        tool_results_by_name[tool_name] = {"raw": content}
+
+        # Map tool results to enrichment_data structure based on tool names
+        # Agent will have used: query_siem, get_threat_intel, get_user_events, get_endpoint_data
+        for tool_name, result in tool_results_by_name.items():
+            if tool_name == "query_siem" or "events" in result:
+                enrichment_data["siem_logs"] = result.get("events", [])
+            
+            elif tool_name == "get_threat_intel" or "reputation" in result or "ip_address" in result:
                 enrichment_data["threat_intel"] = {
-                    "ip_address": threat_intel_result.get("ip_address"),
-                    "ip_reputation": threat_intel_result.get("reputation"),
-                    "threat_score": threat_intel_result.get("threat_score"),
-                    "categories": threat_intel_result.get("categories", []),
-                    "first_seen": threat_intel_result.get("first_seen"),
-                    "last_seen": threat_intel_result.get("last_seen"),
-                    "recommendation": threat_intel_result.get("recommendation"),
-                    "source": threat_intel_result.get("source", "unknown"),
-                    "malicious_count": threat_intel_result.get("malicious_count", 0),
-                    "total_scanners": threat_intel_result.get("total_scanners", 0)
+                    "ip_address": result.get("ip_address"),
+                    "ip_reputation": result.get("reputation", "unknown"),
+                    "threat_score": result.get("threat_score", 0),
+                    "categories": result.get("categories", []),
+                    "source": result.get("source", "unknown"),
+                    "malicious_count": result.get("malicious_count", 0),
+                    "total_scanners": result.get("total_scanners", 0),
                 }
-                print(f"  [MCP] IP Reputation: {threat_intel_result.get('reputation')}")
-            else:
-                print(f"  [MCP] Threat intel query returned invalid type: {type(threat_intel_result).__name__}")
-                enrichment_data["threat_intel"] = {}
-
-        # 3. Get user activity history
-        if alert_data.get("user"):
-            print(f"  [MCP] Getting user events for {alert_data.get('user')}")
-            user_result = await get_user_security_events(
-                username=alert_data.get("user"),
-                time_range="last_7d"
-            )
-
-            if isinstance(user_result, dict):
-                enrichment_data["user_activity"] = user_result
-                print(f"  [MCP] User has {user_result.get('event_count', 0)} security events in last 7 days")
-            else:
-                print(f"  [MCP] User events query returned invalid type: {type(user_result).__name__}")
-                enrichment_data["user_activity"] = {}
-
-        # 4. Get endpoint security data
-        if alert_data.get("hostname"):
-            print(f"  [MCP] Getting endpoint data for {alert_data.get('hostname')}")
-            endpoint_result = await get_endpoint_security_data(alert_data.get("hostname"))
-
-            if isinstance(endpoint_result, dict):
-                enrichment_data["endpoint_data"] = endpoint_result
-                print(f"  [MCP] Endpoint status: {endpoint_result.get('status', 'unknown')}")
-            else:
-                print(f"  [MCP] Endpoint query returned invalid type: {type(endpoint_result).__name__}")
-                enrichment_data["endpoint_data"] = {}
+            
+            elif tool_name == "get_user_events" or "username" in result:
+                enrichment_data["user_activity"] = result
+            
+            elif tool_name == "get_endpoint_data" or "hostname" in result:
+                enrichment_data["endpoint_data"] = result
+        
+        print(f"  [ENRICHMENT] Agent discovered and used {len(tool_results_by_name)} tools")
 
         message = (
-            f"Enrichment completed via MCP: "
+            f"Enrichment completed via agent: "
             f"gathered {len(enrichment_data.get('siem_logs', []))} SIEM events, "
-            f"threat intel for {alert_data.get('source_ip')}, "
-            f"user activity for {alert_data.get('user')}"
+            f"threat intel available: {bool(enrichment_data.get('threat_intel'))}, "
+            f"user activity available: {bool(enrichment_data.get('user_activity'))}"
         )
 
     except Exception as e:
@@ -305,6 +350,9 @@ async def analysis_node(state: SecurityAgentState) -> Dict[str, Any]:
     Uses MITRE RAG with Chroma DB to find matching techniques + LLM for analysis reasoning
     """
     print(f"\n[ANALYSIS] Analyzing threat patterns for alert {state['alert_id']}")
+    
+    # Check and compact messages if needed
+    state = await check_and_compact_messages(state)
 
     alert_data = state["alert_data"]
     enrichment_data = state.get("enrichment_data", {})
@@ -321,19 +369,11 @@ async def analysis_node(state: SecurityAgentState) -> Dict[str, Any]:
         for technique in mitre_mappings[:3]:  # Show top 3
             print(f"    - {technique['technique_id']}: {technique['name']} (confidence: {technique['confidence']:.2%})")
 
-        # Calculate threat score based on MITRE matches
+        # Calculate threat score using LLM-based analysis
+        # MITRE RAG provides technique matches, but LLM interprets context for accurate scoring
         if mitre_mappings:
-            # Base score on highest confidence match
-            max_confidence = max(t['confidence'] for t in mitre_mappings)
-
-            # Calculate weighted average of top 3 techniques
-            top_techniques = sorted(mitre_mappings, key=lambda x: x['confidence'], reverse=True)[:3]
-            weighted_score = sum(t['confidence'] for t in top_techniques) / len(top_techniques)
-
-            # Combine max and weighted (70% weighted, 30% max)
-            threat_score = (weighted_score * 0.7) + (max_confidence * 0.3)
-
             # Determine attack stage and category from top technique
+            top_techniques = sorted(mitre_mappings, key=lambda x: x['confidence'], reverse=True)[:3]
             top_technique = top_techniques[0]
             attack_stage = top_technique.get('tactic', 'Unknown')
 
@@ -353,6 +393,147 @@ async def analysis_node(state: SecurityAgentState) -> Dict[str, Any]:
                 'Impact': 'System Impact'
             }
             threat_category = tactic_to_category.get(attack_stage, 'Suspicious Activity')
+            
+            # Use LLM to calculate threat score based on MITRE matches + context
+            print(f"  [ANALYSIS LLM] Using LLM to calculate threat score from MITRE matches...")
+            try:
+                from src.llm_factory import get_llm
+                from langchain_core.messages import SystemMessage, HumanMessage
+                import json
+
+                llm = get_llm(temperature=0.2)  # Lower temperature for more consistent scoring
+
+                # Build context for LLM threat scoring
+                mitre_summary = "\n".join([
+                    f"- {t['technique_id']}: {t['name']} (MITRE confidence: {t['confidence']:.1%}, Tactic: {t.get('tactic', 'Unknown')})"
+                    for t in top_techniques[:3]
+                ])
+
+                threat_intel = enrichment_data.get("threat_intel", {})
+                siem_logs = enrichment_data.get("siem_logs", [])
+
+                scoring_prompt = f"""You are a cybersecurity threat analyst. Calculate a threat score (0.0-1.0) for this security alert.
+
+ALERT DETAILS:
+- ID: {alert_data.get('id', 'Unknown')}
+- Type: {alert_data.get('type', 'Unknown')}
+- Severity: {alert_data.get('severity', 'unknown')}
+- Source IP: {alert_data.get('source_ip', 'Unknown')}
+- User: {alert_data.get('user', 'Unknown')}
+- Hostname: {alert_data.get('hostname', 'Unknown')}
+- Description: {alert_data.get('description', 'No description')}
+
+MITRE ATT&CK TECHNIQUES MATCHED (from RAG):
+{mitre_summary}
+
+THREAT INTELLIGENCE:
+- IP Reputation: {threat_intel.get('ip_reputation', 'unknown')}
+- Threat Intel Score: {threat_intel.get('threat_score', 0)}/10
+- Categories: {', '.join(threat_intel.get('categories', [])[:3])}
+
+SIEM CONTEXT:
+- Related Events: {len(siem_logs)} events in last 24h
+
+TASK: Calculate a threat score (0.0-1.0) considering:
+1. Alert severity (critical=0.7-1.0, high=0.6-0.9, medium=0.4-0.7, low=0.2-0.5)
+2. MITRE technique relevance (even if RAG confidence is low, if technique matches, it's significant)
+3. Threat intelligence indicators
+4. Attack pattern type (brute force, phishing, malware are inherently high-risk)
+
+IMPORTANT: 
+- MITRE RAG confidence scores can be low (0.15-0.20) but still indicate valid threats
+- A brute force attack with MITRE match should score 0.60-0.85 depending on context
+- Critical severity alerts should score 0.70-1.0
+- Consider the attack type: brute force, phishing, malware are high-risk patterns
+
+Return ONLY a JSON object with this exact structure:
+{{
+    "threat_score": 0.75,
+    "reasoning": "Brief explanation of the score calculation"
+}}
+
+Return ONLY the JSON, no additional text."""
+
+                messages = [
+                    SystemMessage(content="You are an expert cybersecurity analyst. Calculate accurate threat scores based on alert context, MITRE techniques, and threat intelligence. Return only valid JSON."),
+                    HumanMessage(content=scoring_prompt)
+                ]
+
+                print(f"  [ANALYSIS LLM] Requesting threat score from LLM...")
+                response = await llm.ainvoke(messages)
+                
+                # Parse LLM response
+                response_text = response.content.strip()
+                
+                # Clean response (remove markdown code blocks if present)
+                if response_text.startswith("```"):
+                    response_text = response_text.split("```")[1]
+                    if response_text.startswith("json"):
+                        response_text = response_text[4:]
+                    response_text = response_text.strip()
+                
+                # Parse JSON
+                try:
+                    score_data = json.loads(response_text)
+                    llm_threat_score = float(score_data.get("threat_score", 0.5))
+                    llm_reasoning = score_data.get("reasoning", "LLM calculated threat score")
+                    
+                    # Clamp to valid range
+                    llm_threat_score = max(0.0, min(1.0, llm_threat_score))
+                    
+                    print(f"  [ANALYSIS LLM] ✅ LLM calculated threat score: {llm_threat_score:.2f}")
+                    print(f"  [ANALYSIS LLM] Reasoning: {llm_reasoning}")
+                    
+                    threat_score = llm_threat_score
+                    
+                except (json.JSONDecodeError, ValueError, KeyError) as parse_error:
+                    print(f"  [ANALYSIS LLM] ⚠️  Failed to parse LLM response: {parse_error}")
+                    print(f"  [ANALYSIS LLM] Response was: {response_text[:200]}")
+                    print(f"  [ANALYSIS LLM] Falling back to rule-based calculation...")
+                    
+                    # Fallback to rule-based calculation
+                    max_confidence = max(t['confidence'] for t in mitre_mappings)
+                    weighted_score = sum(t['confidence'] for t in top_techniques) / len(top_techniques)
+                    threat_score = (weighted_score * 0.7) + (max_confidence * 0.3)
+                    
+                    # Apply severity-based minimums
+                    alert_severity = alert_data.get("severity", "").lower()
+                    if alert_severity in ["critical", "high"]:
+                        threat_score = max(0.70, threat_score)
+                    elif alert_severity == "medium":
+                        threat_score = max(0.55, threat_score)
+                    
+                    alert_type = alert_data.get("type", "").lower()
+                    if "brute" in alert_type or "unauthorized" in alert_type:
+                        threat_score = max(0.60, threat_score)
+                    elif "phishing" in alert_type:
+                        threat_score = max(0.65, threat_score)
+                    elif "malware" in alert_type or "ransomware" in alert_type:
+                        threat_score = max(0.75, threat_score)
+                    
+            except Exception as llm_error:
+                print(f"  [ANALYSIS LLM] ⚠️  LLM scoring failed: {llm_error}")
+                print(f"  [ANALYSIS] Falling back to rule-based calculation...")
+                
+                # Fallback to rule-based calculation
+                max_confidence = max(t['confidence'] for t in mitre_mappings)
+                weighted_score = sum(t['confidence'] for t in top_techniques) / len(top_techniques)
+                threat_score = (weighted_score * 0.7) + (max_confidence * 0.3)
+                
+                # Apply severity-based minimums
+                alert_severity = alert_data.get("severity", "").lower()
+                if alert_severity in ["critical", "high"]:
+                    threat_score = max(0.70, threat_score)
+                elif alert_severity == "medium":
+                    threat_score = max(0.55, threat_score)
+                
+                alert_type = alert_data.get("type", "").lower()
+                if "brute" in alert_type or "unauthorized" in alert_type:
+                    threat_score = max(0.60, threat_score)
+                elif "phishing" in alert_type:
+                    threat_score = max(0.65, threat_score)
+                elif "malware" in alert_type or "ransomware" in alert_type:
+                    threat_score = max(0.75, threat_score)
 
         else:
             # No MITRE matches found - use baseline
@@ -523,6 +704,9 @@ async def investigation_node(state: SecurityAgentState) -> Dict[str, Any]:
     NOW WITH LLM-POWERED INVESTIGATION PLAN AND FINDINGS
     """
     print(f"\n[INVESTIGATION] Deep investigation for alert {state['alert_id']}")
+    
+    # Check and compact messages if needed
+    state = await check_and_compact_messages(state)
 
     threat_score = state.get("threat_score", 0.0)
 
@@ -812,6 +996,9 @@ async def response_node(state: SecurityAgentState) -> Dict[str, Any]:
     Creates contextual, specific recommendations based on threat intelligence
     """
     print(f"\n[RESPONSE] Generating AI-powered response playbook for alert {state['alert_id']}")
+    
+    # Check and compact messages if needed
+    state = await check_and_compact_messages(state)
 
     threat_score = state.get("threat_score", 0.0)
     attack_stage = state.get("attack_stage", "Unknown")
@@ -830,6 +1017,25 @@ async def response_node(state: SecurityAgentState) -> Dict[str, Any]:
     else:
         severity = "LOW"
 
+    # Try to retrieve relevant playbook
+    relevant_playbook = None
+    try:
+        from src.memory.manager import get_memory_manager
+        
+        memory_manager = get_memory_manager()
+        alert_type = alert_data.get("type", "unknown")
+        
+        # Try to get relevant playbook
+        relevant_playbook = await memory_manager.get_relevant_playbook(
+            threat_type=alert_type,
+            attack_stage=attack_stage
+        )
+        
+        if relevant_playbook:
+            print(f"  [RESPONSE] 📋 Retrieved playbook: {relevant_playbook.get('name')}")
+    except Exception as playbook_error:
+        print(f"  [RESPONSE] ⚠️  Playbook retrieval failed: {playbook_error}")
+
     # Try to generate AI recommendations
     try:
         from src.llm_factory import get_llm
@@ -839,6 +1045,13 @@ async def response_node(state: SecurityAgentState) -> Dict[str, Any]:
 
         # Build context for LLM
         threat_intel = enrichment_data.get("threat_intel", {})
+        
+        # Add playbook context if available
+        playbook_context = ""
+        if relevant_playbook:
+            playbook_content = relevant_playbook.get("content", "")
+            # Include first 500 chars of playbook as context
+            playbook_context = f"\n\nRELEVANT PLAYBOOK CONTEXT:\n{playbook_content[:500]}..."
 
         # MITRE techniques summary
         mitre_summary = "\n".join([
@@ -875,6 +1088,7 @@ MITRE ATT&CK MAPPINGS:
 
 THREAT INTELLIGENCE:
 {ti_summary}
+{playbook_context}
 
 TASK: Generate {5 if severity in ['CRITICAL', 'HIGH'] else 4} specific remediation actions in order of priority.
 
@@ -966,6 +1180,13 @@ Now generate recommendations for THIS alert:"""
         "severity": severity,
         "estimated_time": "15 minutes" if severity == "CRITICAL" else "30 minutes" if severity == "HIGH" else "1 hour"
     }
+    
+    # Add playbook reference if available
+    if relevant_playbook:
+        remediation_playbook["playbook_reference"] = {
+            "name": relevant_playbook.get("name"),
+            "metadata": relevant_playbook.get("metadata", {})
+        }
 
     # Categorize actions by urgency
     immediate_actions = []
@@ -1084,6 +1305,18 @@ async def memory_save_node(state: SecurityAgentState) -> Dict[str, Any]:
         from src.memory.manager import get_memory_manager
 
         memory_manager = get_memory_manager()
+        
+        # Initialize playbooks if not already done (one-time initialization)
+        try:
+            from src.memory.playbooks import initialize_playbooks
+            # Check if playbooks already exist by trying to retrieve one
+            test_playbook = await memory_manager.get_relevant_playbook("phishing")
+            if test_playbook is None:
+                # Playbooks not initialized yet, initialize them
+                await initialize_playbooks(memory_manager)
+        except Exception as playbook_error:
+            # Playbook initialization is optional, continue if it fails
+            print(f"[MEMORY] ⚠️  Playbook initialization skipped: {playbook_error}")
 
         # Save incident to memory
         incident_id = await memory_manager.save_incident(
@@ -1093,12 +1326,30 @@ async def memory_save_node(state: SecurityAgentState) -> Dict[str, Any]:
 
         print(f"[MEMORY] ✅ Investigation saved: {incident_id}")
 
-        # TODO: Check for campaign detection (Phase 2)
-        # campaign_info = await campaign_detector.check_for_campaign(...)
+        # Check for campaign detection
+        campaign_info = None
+        try:
+            from src.memory.campaign_detector import CampaignDetector
+            
+            campaign_detector = CampaignDetector(time_window_hours=48)
+            campaign_info = await campaign_detector.check_for_campaign(
+                memory_manager=memory_manager,
+                current_incident=dict(state),
+                user_id="default_user"
+            )
+            
+            if campaign_info:
+                print(f"[MEMORY] 🚨 Campaign detected: {campaign_info.get('campaign_id')}")
+            else:
+                print(f"[MEMORY] ℹ️  No campaign detected for this incident")
+        except Exception as campaign_error:
+            print(f"[MEMORY] ⚠️  Campaign detection failed: {campaign_error}")
+            # Continue without campaign info
 
         return {
             "current_agent": "memory_save",
-            "messages": [AIMessage(content=f"Investigation {incident_id} saved to memory")]
+            "campaign_info": campaign_info,
+            "messages": [AIMessage(content=f"Investigation {incident_id} saved to memory" + (f" - Campaign detected: {campaign_info.get('campaign_id')}" if campaign_info else ""))]
         }
 
     except Exception as e:
