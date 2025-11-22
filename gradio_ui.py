@@ -38,6 +38,236 @@ def sanitize_html(text: Any) -> str:
     return html.escape(str(text))
 
 
+def _markdown_to_html(text: str) -> str:
+    """
+    Convert basic markdown to HTML for agent reasoning display
+    Handles: **bold**, *italic*, `code`, lists, headers
+    """
+    import re
+
+    # Escape HTML first but preserve our markdown
+    text = html.escape(text)
+
+    # Convert markdown to HTML
+    # Headers (## Header)
+    text = re.sub(r'^### (.+)$', r'<strong style="color: #f59e0b;">\1</strong>', text, flags=re.MULTILINE)
+    text = re.sub(r'^## (.+)$', r'<strong style="color: #f59e0b;">\1</strong>', text, flags=re.MULTILINE)
+    text = re.sub(r'^\*\*(\d+)\. (.+?)\*\*$', r'<strong>\1. \2</strong>', text, flags=re.MULTILINE)
+
+    # Bold (**text**)
+    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+
+    # Italic (*text*) - but not bullet points
+    text = re.sub(r'(?<!\*)\*([^*\n]+?)\*(?!\*)', r'<em>\1</em>', text)
+
+    # Inline code (`code`)
+    text = re.sub(r'`([^`]+)`', r'<code style="background: #1a1a2e; padding: 2px 6px; border-radius: 4px; font-family: monospace;">\1</code>', text)
+
+    # Bullet points (* item or - item)
+    text = re.sub(r'^[\*\-] (.+)$', r'<span style="color: #888;">•</span> \1', text, flags=re.MULTILINE)
+
+    # Numbered lists (1. item)
+    text = re.sub(r'^(\d+)\. (.+)$', r'<span style="color: #3b82f6;">\1.</span> \2', text, flags=re.MULTILINE)
+
+    # Convert newlines to <br>
+    text = text.replace('\n', '<br>')
+
+    return text
+
+
+def format_agent_chat_html(messages: List[Dict], streaming_agent: str = None, streaming_content: str = "", agent_config: Dict = None) -> str:
+    """
+    Format agent chat messages as HTML with distinct styling per agent
+
+    Args:
+        messages: List of chat messages {agent, type, content, tool_name?}
+        streaming_agent: Currently streaming agent (for live indicator)
+        streaming_content: Current streaming content
+        agent_config: Agent configuration with colors and emojis
+
+    Returns:
+        HTML formatted chat
+    """
+    if not agent_config:
+        agent_config = {
+            "supervisor": {"emoji": "🎯", "color": "#3b82f6", "name": "SUPERVISOR"},
+            "enrichment": {"emoji": "🔍", "color": "#10b981", "name": "ENRICHMENT"},
+            "analysis": {"emoji": "🧠", "color": "#f59e0b", "name": "ANALYSIS"},
+            "investigation": {"emoji": "🔬", "color": "#8b5cf6", "name": "INVESTIGATION"},
+            "response": {"emoji": "🛡️", "color": "#ef4444", "name": "RESPONSE"},
+            "communication": {"emoji": "📝", "color": "#06b6d4", "name": "COMMUNICATION"},
+            "memory": {"emoji": "💾", "color": "#ec4899", "name": "MEMORY"},
+        }
+
+    if not messages and not streaming_content:
+        return "<div style='color: #666; padding: 20px; text-align: center;'>Waiting for agents to start...</div>"
+
+    html_parts = []
+
+    # Group consecutive messages from same agent
+    current_agent = None
+    current_group = []
+
+    def render_agent_group(agent: str, group_messages: List[Dict]) -> str:
+        """Render a group of messages from the same agent"""
+        config = agent_config.get(agent, {"emoji": "🤖", "color": "#666", "name": agent.upper()})
+        emoji = config["emoji"]
+        color = config["color"]
+        name = config["name"]
+
+        # Agent header
+        group_html = f"""
+        <div style="margin-bottom: 16px; border-left: 3px solid {color}; padding-left: 12px;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                <span style="font-size: 1.2rem;">{emoji}</span>
+                <span style="color: {color}; font-weight: 700; font-size: 0.85rem; letter-spacing: 0.05em;">{name}</span>
+            </div>
+            <div style="color: #e0e0e0; font-size: 0.85rem; line-height: 1.6;">
+        """
+
+        for msg in group_messages:
+            msg_type = msg.get("type", "thinking")
+            content = msg.get("content", "")
+            tool_name = msg.get("tool_name", "")
+
+            if msg_type == "tool_call":
+                # Tool call with special styling
+                safe_content = html.escape(content) if content else ""
+                group_html += f"""
+                <div style="background: #1a1a2e; border: 1px solid {color}40; border-radius: 6px; padding: 8px 12px; margin: 6px 0; font-family: 'JetBrains Mono', monospace;">
+                    <span style="color: #fbbf24;">🔧</span>
+                    <span style="color: {color};">{html.escape(tool_name)}</span>
+                    <span style="color: #888;">()</span>
+                    {f'<span style="color: #10b981;"> → {safe_content}</span>' if safe_content else '<span style="color: #888;"> calling...</span>'}
+                </div>
+                """
+            elif msg_type == "tool_result":
+                # Tool result
+                safe_content = html.escape(content)
+                group_html += f"""
+                <div style="background: #0a1a0a; border: 1px solid #10b98140; border-radius: 6px; padding: 8px 12px; margin: 6px 0;">
+                    <span style="color: #10b981;">✓</span>
+                    <span style="color: #a0a0a0;">{safe_content}</span>
+                </div>
+                """
+            else:
+                # Regular thinking/content - convert markdown to HTML
+                formatted_content = _markdown_to_html(content)
+                group_html += f"<div style='margin: 4px 0;'>{formatted_content}</div>"
+
+        group_html += "</div></div>"
+        return group_html
+
+    # Process messages and group by agent
+    for msg in messages:
+        agent = msg.get("agent", "unknown")
+        if agent != current_agent:
+            if current_group:
+                html_parts.append(render_agent_group(current_agent, current_group))
+            current_agent = agent
+            current_group = [msg]
+        else:
+            current_group.append(msg)
+
+    # Render last group
+    if current_group:
+        html_parts.append(render_agent_group(current_agent, current_group))
+
+    # Add streaming content if active
+    if streaming_agent and streaming_content:
+        config = agent_config.get(streaming_agent, {"emoji": "🤖", "color": "#666", "name": streaming_agent.upper()})
+        emoji = config["emoji"]
+        color = config["color"]
+        name = config["name"]
+
+        # Convert markdown to HTML for streaming content too
+        formatted_content = _markdown_to_html(streaming_content)
+        html_parts.append(f"""
+        <div style="margin-bottom: 16px; border-left: 3px solid {color}; padding-left: 12px;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                <span style="font-size: 1.2rem;">{emoji}</span>
+                <span style="color: {color}; font-weight: 700; font-size: 0.85rem; letter-spacing: 0.05em;">{name}</span>
+                <span style="color: #888; font-size: 0.7rem; animation: pulse 1s infinite;">● thinking...</span>
+            </div>
+            <div style="color: #e0e0e0; font-size: 0.85rem; line-height: 1.6;">
+                {formatted_content}<span style="color: {color}; animation: blink 0.5s infinite;">█</span>
+            </div>
+        </div>
+        """)
+
+    # Styles only - no inner scroll container (let #reasoning_panel CSS handle scroll)
+    return f"""
+    <style>
+        @keyframes blink {{ 0%, 50% {{ opacity: 1; }} 51%, 100% {{ opacity: 0; }} }}
+        @keyframes pulse {{ 0%, 100% {{ opacity: 1; }} 50% {{ opacity: 0.5; }} }}
+    </style>
+    <div style="font-family: 'Inter', -apple-system, sans-serif; padding: 16px; background: transparent; border-radius: 8px;">
+        {''.join(html_parts)}
+    </div>
+    """
+
+
+def _build_enrichment_data(source_state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build enrichment data with intelligent fallbacks
+
+    If external threat intel (VirusTotal/AbuseIPDB) returns no data,
+    falls back to the calculated threat score from the analysis.
+    """
+    enrichment = source_state.get("enrichment_data", {})
+    threat_intel = enrichment.get("threat_intel", {})
+
+    # Get raw values from external threat intel
+    raw_reputation = threat_intel.get("ip_reputation") or threat_intel.get("reputation", "")
+    raw_score = threat_intel.get("threat_score", 0)
+    raw_source = threat_intel.get("source", "")
+    raw_malicious = threat_intel.get("malicious_count", 0)
+    raw_scanners = threat_intel.get("total_scanners", 0)
+    siem_logs = enrichment.get("siem_logs", [])
+
+    # Get calculated threat score from analysis
+    calculated_score = source_state.get("threat_score", 0.0)
+
+    # Determine if we have valid external intel
+    has_external_intel = (
+        raw_reputation and
+        raw_reputation.lower() not in ["unknown", "none", ""] and
+        raw_source and
+        raw_source.lower() not in ["mock", "none", ""]
+    )
+
+    if has_external_intel:
+        # Use external threat intel data
+        ip_reputation = raw_reputation
+        threat_score_intel = raw_score
+        intel_source = raw_source
+        malicious_detections = raw_malicious
+        total_scanners = raw_scanners
+    else:
+        # Fallback to calculated values from analysis
+        # Convert threat_score (0-1) to reputation label and 0-10 scale
+        if calculated_score >= 0.7:
+            ip_reputation = "HIGH RISK"
+        elif calculated_score >= 0.4:
+            ip_reputation = "MEDIUM"
+        else:
+            ip_reputation = "LOW"
+
+        threat_score_intel = round(calculated_score * 10, 1)  # Convert to 0-10 scale
+        intel_source = "Analysis"
+        malicious_detections = int(calculated_score * 10)  # Approximate
+        total_scanners = 10
+
+    return {
+        "siem_logs_count": len(siem_logs),
+        "ip_reputation": sanitize_html(ip_reputation),
+        "threat_score_intel": threat_score_intel,
+        "threat_intel_source": sanitize_html(intel_source),
+        "malicious_detections": malicious_detections,
+        "total_scanners": total_scanners,
+    }
+
+
 # ===== Core Investigation Function (ASYNC GENERATOR - NO asyncio.run) =====
 
 async def investigate_alert_streaming_v2(
@@ -103,14 +333,21 @@ async def investigate_alert_streaming_v2(
         "campaign_info": None
     }
     
-    # NEW: Track reasoning text per node
-    reasoning_buffer = {
-        "analysis": "",
-        "investigation": "",
-        "response": "",
-        "current": ""
+    # Agent Chat System - Messages from all agents
+    agent_chat_messages = []  # List of {agent, type, content, tool_name?}
+    current_streaming_content = ""  # For token-by-token streaming
+    current_streaming_agent = None
+
+    # Agent configuration with colors and emojis
+    agent_config = {
+        "supervisor": {"emoji": "🎯", "color": "#3b82f6", "name": "SUPERVISOR"},
+        "enrichment": {"emoji": "🔍", "color": "#10b981", "name": "ENRICHMENT"},
+        "analysis": {"emoji": "🧠", "color": "#f59e0b", "name": "ANALYSIS"},
+        "investigation": {"emoji": "🔬", "color": "#8b5cf6", "name": "INVESTIGATION"},
+        "response": {"emoji": "🛡️", "color": "#ef4444", "name": "RESPONSE"},
+        "communication": {"emoji": "📝", "color": "#06b6d4", "name": "COMMUNICATION"},
+        "memory": {"emoji": "💾", "color": "#ec4899", "name": "MEMORY"},
     }
-    current_reasoning_node = None
 
     try:
         # Parse and sanitize alert
@@ -175,22 +412,37 @@ async def investigate_alert_streaming_v2(
                 # Update for next node
                 last_node_complete_time = current_event_time
 
-            # Handle LLM reasoning events (NEW)
+            # Handle LLM reasoning events - Agent Chat System
             if event_type == "llm_reasoning_start":
-                current_reasoning_node = node
-                reasoning_buffer["current"] = f"\n[🤔 {node.upper()} AGENT] Thinking...\n\n"
-                
+                current_streaming_agent = node
+                current_streaming_content = ""
+                # Don't yield here - wait for tokens to come
+                continue
+
             elif event_type == "llm_token":
-                # Append token to current reasoning
+                # Append token to streaming content
                 token = event.get("data", {}).get("token", message)
-                reasoning_buffer["current"] += token
-                
-                # Update reasoning panel immediately (real-time streaming)
-                reasoning_display = (
-                    reasoning_buffer.get("analysis", "") +
-                    reasoning_buffer.get("investigation", "") +
-                    reasoning_buffer.get("response", "") +
-                    reasoning_buffer["current"]
+                current_streaming_content += token
+
+                # Check if streaming content looks like JSON - don't display live
+                content_preview = current_streaming_content.strip()
+                is_json_streaming = (
+                    content_preview.startswith('[') or
+                    content_preview.startswith('{') or
+                    content_preview.startswith('```json') or
+                    content_preview.startswith('```\n[') or
+                    content_preview.startswith('```\n{')
+                )
+
+                # Only show streaming if it's not JSON
+                display_content = "" if is_json_streaming else current_streaming_content
+
+                # Generate chat HTML with streaming
+                chat_html = format_agent_chat_html(
+                    agent_chat_messages,
+                    streaming_agent=current_streaming_agent if not is_json_streaming else None,
+                    streaming_content=display_content,
+                    agent_config=agent_config
                 )
                 
                 # Yield with updated reasoning (REAL-TIME TOKEN STREAMING)
@@ -205,20 +457,64 @@ async def investigate_alert_streaming_v2(
                 
                 yield (
                     _get_status_compact_html(current_node or "supervisor", completed_nodes, skipped_nodes, current_progress, time.time() - start_time),
-                    reasoning_display,  # Live reasoning
+                    chat_html,  # Agent Chat with live streaming
                     "",  # No HTML results yet
                     memory_reasoning_md,  # Memory reasoning
                     similar_incidents_html,  # Similar incidents
                     campaign_alert_html  # Campaign alert
                 )
                 continue  # Skip the normal yield at the end
-                
+
             elif event_type == "llm_reasoning_complete":
-                # Save completed reasoning
-                if current_reasoning_node:
-                    reasoning_buffer[current_reasoning_node] = reasoning_buffer["current"]
-                    reasoning_buffer["current"] = ""
-                    current_reasoning_node = None
+                # Save completed reasoning to agent chat messages
+                # Filter out JSON responses (from plan/findings generation)
+                if current_streaming_agent and current_streaming_content:
+                    content = current_streaming_content.strip()
+
+                    # Skip if content is primarily JSON (investigation plan/findings)
+                    is_json = (
+                        (content.startswith('[') and content.rstrip().endswith(']')) or
+                        (content.startswith('{') and content.rstrip().endswith('}')) or
+                        (content.startswith('```json') or content.startswith('```\n[') or content.startswith('```\n{'))
+                    )
+
+                    if not is_json and len(content) > 50:  # Only save non-JSON, meaningful content
+                        agent_chat_messages.append({
+                            "agent": current_streaming_agent,
+                            "type": "thinking",
+                            "content": content
+                        })
+
+                current_streaming_agent = None
+                current_streaming_content = ""
+                # Don't yield here - the next event will update the display
+                continue
+
+            # Handle tool call events (NEW - for Agent Chat)
+            elif event_type == "tool_call":
+                tool_data = event.get("data", {})
+                agent_chat_messages.append({
+                    "agent": node,
+                    "type": "tool_call",
+                    "tool_name": tool_data.get("tool", "unknown"),
+                    "content": tool_data.get("result", "")
+                })
+
+            elif event_type == "tool_result":
+                tool_data = event.get("data", {})
+                agent_chat_messages.append({
+                    "agent": node,
+                    "type": "tool_result",
+                    "content": tool_data.get("summary", message)
+                })
+
+            # Handle agent_message events (for non-streaming agent output)
+            elif event_type == "agent_message":
+                agent_chat_messages.append({
+                    "agent": node,
+                    "type": "thinking",
+                    "content": message
+                })
 
             # Map event type to emoji
             emoji_map = {
@@ -272,27 +568,26 @@ async def investigate_alert_streaming_v2(
                 final_state = state
                 current_progress = 100
 
-            # Get current reasoning display with key events integrated
-            reasoning_display = (
-                reasoning_buffer.get("analysis", "") +
-                reasoning_buffer.get("investigation", "") +
-                reasoning_buffer.get("response", "") +
-                reasoning_buffer.get("current", "") +
-                get_key_events_summary(activity_log_lines)  # NEW: Integrated key events
+            # Generate Agent Chat HTML
+            chat_html = format_agent_chat_html(
+                agent_chat_messages,
+                streaming_agent=current_streaming_agent,
+                streaming_content=current_streaming_content,
+                agent_config=agent_config
             )
 
             # Extract memory data from accumulated state
             memory_reasoning = accumulated_state.get("memory_reasoning", "")
             similar_incidents = accumulated_state.get("similar_incidents", [])
             campaign_info = accumulated_state.get("campaign_info")
-            
+
             memory_reasoning_md = memory_reasoning if memory_reasoning else "*No memory reasoning available yet.*"
             similar_incidents_html = format_similar_incidents_html(similar_incidents)
             campaign_alert_html = format_campaign_alert_html(campaign_info)
-            
+
             yield (
                 _get_status_compact_html(current_node or "supervisor", completed_nodes, skipped_nodes, current_progress, time.time() - start_time),
-                reasoning_display,  # Reasoning with integrated events
+                chat_html,  # Agent Chat
                 "",  # No HTML results yet
                 memory_reasoning_md,  # Memory reasoning
                 similar_incidents_html,  # Similar incidents
@@ -317,14 +612,7 @@ async def investigate_alert_streaming_v2(
                 "mitre_mappings": source_state.get("mitre_mappings", []),
                 "recommendations": source_state.get("recommendations", []),
                 "report": source_state.get("report", ""),
-                "enrichment_data": {
-                    "siem_logs_count": len(source_state.get("enrichment_data", {}).get("siem_logs", [])),
-                    "ip_reputation": sanitize_html(source_state.get("enrichment_data", {}).get("threat_intel", {}).get("ip_reputation", "unknown")),
-                    "threat_score_intel": source_state.get("enrichment_data", {}).get("threat_intel", {}).get("threat_score", 0),
-                    "threat_intel_source": sanitize_html(source_state.get("enrichment_data", {}).get("threat_intel", {}).get("source", "mock")),
-                    "malicious_detections": source_state.get("enrichment_data", {}).get("threat_intel", {}).get("malicious_count", 0),
-                    "total_scanners": source_state.get("enrichment_data", {}).get("threat_intel", {}).get("total_scanners", 0),
-                },
+                "enrichment_data": _build_enrichment_data(source_state),
                 "workflow_status": source_state.get("workflow_status", "completed"),
                 "performance": {
                     "total_time": round(total_time, 2),
@@ -344,26 +632,24 @@ async def investigate_alert_streaming_v2(
                 "🎉"
             ))
 
-            # Get final reasoning display with all key events
-            final_reasoning = (
-                reasoning_buffer.get("analysis", "") +
-                reasoning_buffer.get("investigation", "") +
-                reasoning_buffer.get("response", "") +
-                get_key_events_summary(activity_log_lines)
+            # Get final Agent Chat HTML
+            final_chat_html = format_agent_chat_html(
+                agent_chat_messages,
+                agent_config=agent_config
             )
 
             # Extract final memory data
             memory_reasoning = accumulated_state.get("memory_reasoning", "")
             similar_incidents = accumulated_state.get("similar_incidents", [])
             campaign_info = accumulated_state.get("campaign_info")
-            
+
             memory_reasoning_md = memory_reasoning if memory_reasoning else "*No memory reasoning available.*"
             similar_incidents_html = format_similar_incidents_html(similar_incidents)
             campaign_alert_html = format_campaign_alert_html(campaign_info)
-            
+
             yield (
-                _get_status_compact_html("communication", completed_nodes, skipped_nodes, 100, total_time),
-                final_reasoning,  # Complete reasoning with events
+                _get_status_compact_html("communication", completed_nodes, skipped_nodes, 100, total_time, result['threat_score']),
+                final_chat_html,  # Final Agent Chat
                 html_output,  # Investigation results
                 memory_reasoning_md,  # Memory reasoning
                 similar_incidents_html,  # Similar incidents
@@ -719,7 +1005,7 @@ def _get_initial_status_compact_html() -> str:
     """
 
 
-def _get_status_compact_html(current_node: str, completed_nodes: List[str], skipped_nodes: List[str], progress_pct: int, total_time: float) -> str:
+def _get_status_compact_html(current_node: str, completed_nodes: List[str], skipped_nodes: List[str], progress_pct: int, total_time: float, threat_score: float = None) -> str:
     """
     Generate updated status with vertical step-by-step workflow
     Shows execution order and current progress
@@ -823,6 +1109,34 @@ def _get_status_compact_html(current_node: str, completed_nodes: List[str], skip
                 <span style="font-size: 0.7rem; color: #999999; font-weight: 500; letter-spacing: 0.05em;">TIME</span>
                 <span style="font-size: 0.8rem; color: #e8e8e8; font-weight: 600;">{total_time:.1f}s</span>
             </div>
+            {_get_threat_score_html(threat_score, progress_pct)}
+        </div>
+    </div>
+    """
+
+
+def _get_threat_score_html(threat_score: float, progress_pct: int) -> str:
+    """Generate threat score display for completed investigations"""
+    if threat_score is None or progress_pct < 100:
+        return ""
+
+    # Color based on severity
+    if threat_score >= 0.7:
+        color = "#ef4444"  # Red - High
+        label = "HIGH"
+    elif threat_score >= 0.4:
+        color = "#f59e0b"  # Amber - Medium
+        label = "MEDIUM"
+    else:
+        color = "#10b981"  # Green - Low
+        label = "LOW"
+
+    return f"""
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px;">
+        <span style="font-size: 0.7rem; color: #999999; font-weight: 500; letter-spacing: 0.05em;">THREAT</span>
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 0.65rem; color: {color}; font-weight: 600; padding: 2px 6px; background: {color}22; border-radius: 4px;">{label}</span>
+            <span style="font-size: 0.8rem; color: {color}; font-weight: 600;">{threat_score:.2f}</span>
         </div>
     </div>
     """
@@ -833,61 +1147,6 @@ def _format_activity_log(timestamp: str, node: str, message: str, emoji: str = "
     return f"[{timestamp}] {emoji} {node:15s} -> {message}"
 
 
-def get_key_events_summary(activity_log_lines: List[str], max_events: int = 8) -> str:
-    """
-    Extract only key events (node complete, errors, important milestones)
-    Filters out noise from state_update events and deduplicates similar messages
-
-    Args:
-        activity_log_lines: Full list of activity log lines
-        max_events: Maximum number of key events to show
-
-    Returns:
-        Markdown formatted string with key events
-    """
-    key_events = []
-    seen_event_keys = set()  # Track unique events to prevent duplicates
-    important_keywords = ["✅", "❌", "🎉", "COMPLETED", "ERROR", "FAILED", "started processing", "Threat Score"]
-
-    for line in activity_log_lines:
-        # Filter for important events only
-        if any(keyword in line for keyword in important_keywords):
-            # Extract event key (remove timestamp for deduplication)
-            # Format: [HH:MM:SS] EMOJI NODE -> message
-            # We want to deduplicate based on NODE + message content
-            parts = line.split(" -> ", 1)
-            if len(parts) == 2:
-                # Get the part after timestamp: "EMOJI NODE"
-                prefix_parts = parts[0].split("] ", 1)
-                if len(prefix_parts) == 2:
-                    event_key = prefix_parts[1].strip() + " -> " + parts[1].strip()
-                else:
-                    event_key = line
-            else:
-                event_key = line
-
-            # Only add if we haven't seen this event type before
-            if event_key not in seen_event_keys:
-                seen_event_keys.add(event_key)
-                key_events.append(line)
-
-    # Get last N events
-    recent_events = key_events[-max_events:] if len(key_events) > max_events else key_events
-
-    if not recent_events:
-        return ""
-
-    # Format as markdown with proper line breaks for Gradio
-    # Use HTML <br> tags for reliable line breaks
-    events_md = "\n\n---\n\n### Key Events\n\n"
-    event_lines = []
-    for event in recent_events:
-        event_lines.append(f"○ `{event}`")
-
-    # Join with <br> for reliable line breaks in Gradio Markdown
-    events_md += "<br>\n".join(event_lines)
-
-    return events_md
 
 
 # ===== HTML Formatters for Memory Context =====
@@ -1672,12 +1931,33 @@ def create_gradio_interface():
         function setupAutoScroll() {
             // Auto-scroll reasoning panel when content updates
             const setupObserver = () => {
+                // Try multiple selectors to find the scrollable container
                 const reasoningPanel = document.querySelector('#reasoning_panel');
+
                 if (reasoningPanel) {
+                    // Find the actual scrollable element (might be nested)
+                    const findScrollable = (el) => {
+                        if (!el) return null;
+                        const style = window.getComputedStyle(el);
+                        if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+                            return el;
+                        }
+                        // Check children
+                        for (let child of el.children) {
+                            const found = findScrollable(child);
+                            if (found) return found;
+                        }
+                        return el; // Default to the panel itself
+                    };
+
+                    const scrollContainer = findScrollable(reasoningPanel) || reasoningPanel;
+
                     // Create a MutationObserver to watch for content changes
                     const observer = new MutationObserver((mutations) => {
-                        // Scroll to bottom when content changes
-                        reasoningPanel.scrollTop = reasoningPanel.scrollHeight;
+                        // Use requestAnimationFrame for smooth scrolling
+                        requestAnimationFrame(() => {
+                            scrollContainer.scrollTop = scrollContainer.scrollHeight;
+                        });
                     });
 
                     // Start observing
@@ -1686,6 +1966,9 @@ def create_gradio_interface():
                         subtree: true,
                         characterData: true
                     });
+
+                    // Initial scroll
+                    scrollContainer.scrollTop = scrollContainer.scrollHeight;
 
                     console.log('[SOC] Auto-scroll enabled for reasoning panel');
                 } else {
@@ -1773,10 +2056,9 @@ def create_gradio_interface():
                                     <div style="font-family: 'Inter', sans-serif; font-size: 0.875rem; color: #999999; font-weight: 400; line-height: 1.5;">Live LLM reasoning from Analysis and Response agents.</div>
                                 </div>
                             """)
-                            reasoning_panel = gr.Markdown(
-                                value="*Agent reasoning will appear here as the LLM thinks...*",
+                            reasoning_panel = gr.HTML(
+                                value="<div style='color: #666; padding: 20px; text-align: center;'>Agent reasoning will appear here as the investigation runs...</div>",
                                 show_label=False,
-                                container=False,
                                 elem_id="reasoning_panel"
                             )
 

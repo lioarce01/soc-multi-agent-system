@@ -208,28 +208,42 @@ Return the results in a structured format that includes all the data you collect
 
         # Map tool results to enrichment_data structure based on tool names
         # Agent will have used: query_siem, get_threat_intel, get_user_events, get_endpoint_data
-        for tool_name, result in tool_results_by_name.items():
-            if tool_name == "query_siem" or "events" in result:
-                enrichment_data["siem_logs"] = result.get("events", [])
-            
-            elif tool_name == "get_threat_intel" or "reputation" in result or "ip_address" in result:
+        print(f"  [ENRICHMENT] Processing {len(tool_results_by_name)} tool results:")
+        for tool_name, tool_result in tool_results_by_name.items():
+            print(f"    - Tool: {tool_name}, Keys: {list(tool_result.keys()) if isinstance(tool_result, dict) else 'not dict'}")
+
+            # SIEM logs
+            if tool_name == "query_siem" or (isinstance(tool_result, dict) and "events" in tool_result):
+                enrichment_data["siem_logs"] = tool_result.get("events", [])
+                print(f"    -> Mapped to siem_logs: {len(enrichment_data['siem_logs'])} events")
+
+            # Threat Intel - check multiple possible field names
+            elif tool_name == "get_threat_intel" or (isinstance(tool_result, dict) and any(k in tool_result for k in ["reputation", "ip_address", "threat_score"])):
                 enrichment_data["threat_intel"] = {
-                    "ip_address": result.get("ip_address"),
-                    "ip_reputation": result.get("reputation", "unknown"),
-                    "threat_score": result.get("threat_score", 0),
-                    "categories": result.get("categories", []),
-                    "source": result.get("source", "unknown"),
-                    "malicious_count": result.get("malicious_count", 0),
-                    "total_scanners": result.get("total_scanners", 0),
+                    "ip_address": tool_result.get("ip_address"),
+                    "ip_reputation": tool_result.get("reputation") or tool_result.get("ip_reputation", "unknown"),
+                    "reputation": tool_result.get("reputation") or tool_result.get("ip_reputation", "unknown"),
+                    "threat_score": tool_result.get("threat_score", 0),
+                    "categories": tool_result.get("categories", []),
+                    "source": tool_result.get("source", "unknown"),
+                    "malicious_count": tool_result.get("malicious_count", 0),
+                    "total_scanners": tool_result.get("total_scanners", 0),
+                    "confidence": tool_result.get("confidence", 0),
+                    "recommendation": tool_result.get("recommendation", ""),
                 }
-            
-            elif tool_name == "get_user_events" or "username" in result:
-                enrichment_data["user_activity"] = result
-            
-            elif tool_name == "get_endpoint_data" or "hostname" in result:
-                enrichment_data["endpoint_data"] = result
-        
-        print(f"  [ENRICHMENT] Agent discovered and used {len(tool_results_by_name)} tools")
+                print(f"    -> Mapped to threat_intel: reputation={enrichment_data['threat_intel']['reputation']}, score={enrichment_data['threat_intel']['threat_score']}")
+
+            # User activity
+            elif tool_name == "get_user_events" or (isinstance(tool_result, dict) and "username" in tool_result):
+                enrichment_data["user_activity"] = tool_result
+                print(f"    -> Mapped to user_activity")
+
+            # Endpoint data
+            elif tool_name == "get_endpoint_data" or (isinstance(tool_result, dict) and "hostname" in tool_result and "running_processes" in tool_result):
+                enrichment_data["endpoint_data"] = tool_result
+                print(f"    -> Mapped to endpoint_data")
+
+        print(f"  [ENRICHMENT] Final enrichment_data keys: {list(enrichment_data.keys())}")
 
         message = (
             f"Enrichment completed via agent: "
@@ -1157,18 +1171,105 @@ Now generate recommendations for THIS alert:"""
 
 async def communication_node(state: SecurityAgentState) -> Dict[str, Any]:
     """
-    Communication Agent - Generate human-readable report
-    Creates final investigation report
+    Communication Agent - Generate human-readable report with LLM executive summary
+    NOW WITH STREAMING LLM REASONING
+    Creates final investigation report with AI-generated executive summary
     """
     print(f"\n[COMMUNICATION] Generating report for alert {state['alert_id']}")
+
+    # Check and compact messages if needed
+    state = await check_and_compact_messages(state)
 
     alert_data = state["alert_data"]
     threat_score = state.get("threat_score", 0.0)
     attack_stage = state.get("attack_stage", "Unknown")
+    threat_category = state.get("threat_category", "Unknown")
     mitre_mappings = state.get("mitre_mappings", [])
     recommendations = state.get("recommendations", [])
+    enrichment_data = state.get("enrichment_data", {})
+    investigation_findings = state.get("investigation_findings", {})
 
-    # Generate structured report
+    # Determine severity
+    if threat_score >= 0.85:
+        severity = "CRITICAL"
+    elif threat_score >= 0.65:
+        severity = "HIGH"
+    elif threat_score >= 0.45:
+        severity = "MEDIUM"
+    else:
+        severity = "LOW"
+
+    # Generate LLM executive summary with streaming
+    executive_summary = ""
+    try:
+        from src.llm_factory import get_llm
+        from langchain_core.messages import SystemMessage, HumanMessage
+
+        llm = get_llm(temperature=0.3, streaming=True)
+
+        # Build context for executive summary
+        mitre_summary = "\n".join([
+            f"- {m['technique_id']}: {m['name']}"
+            for m in mitre_mappings[:3]
+        ]) if mitre_mappings else "No MITRE techniques identified"
+
+        recommendations_summary = "\n".join([
+            f"- {rec}" for rec in recommendations[:5]
+        ]) if recommendations else "No recommendations generated"
+
+        threat_intel = enrichment_data.get("threat_intel", {})
+
+        prompt = f"""You are a SOC analyst writing an executive summary for security leadership.
+
+INCIDENT DETAILS:
+- Alert ID: {state.get('alert_id', 'Unknown')}
+- Alert Type: {alert_data.get('type', 'Unknown')}
+- Severity: {severity}
+- Threat Score: {threat_score:.0%}
+- Attack Stage: {attack_stage}
+- Threat Category: {threat_category}
+
+AFFECTED ASSETS:
+- User: {alert_data.get('user', 'Unknown')}
+- Hostname: {alert_data.get('hostname', 'Unknown')}
+- Source IP: {alert_data.get('source_ip', 'Unknown')}
+
+THREAT INTELLIGENCE:
+- IP Reputation: {threat_intel.get('ip_reputation', 'unknown')}
+- Threat Score: {threat_intel.get('threat_score', 0)}/10
+
+MITRE ATT&CK:
+{mitre_summary}
+
+RECOMMENDED ACTIONS:
+{recommendations_summary}
+
+TASK: Write a concise executive summary (3-4 sentences) that:
+1. States the threat type and severity clearly
+2. Summarizes what was detected and the potential impact
+3. Highlights the most critical recommended action
+4. Provides a clear risk assessment for leadership
+
+Be professional, direct, and actionable. No bullet points - write flowing prose."""
+
+        messages = [
+            SystemMessage(content="You are an expert SOC analyst writing executive summaries for security leadership. Be concise and professional."),
+            HumanMessage(content=prompt)
+        ]
+
+        print(f"  [COMMUNICATION LLM] Generating executive summary...")
+
+        async for chunk in llm.astream(messages):
+            if chunk.content:
+                executive_summary += chunk.content
+
+        print(f"  [COMMUNICATION LLM] Executive summary complete ({len(executive_summary)} chars)")
+
+    except Exception as e:
+        print(f"  [WARNING] LLM executive summary failed: {e}")
+        executive_summary = f"A {severity.lower()} severity {alert_data.get('type', 'security')} incident was detected requiring immediate attention."
+
+    # Generate structured report with executive summary
     report = f"""
 SECURITY ALERT INVESTIGATION REPORT
 =====================================
@@ -1176,12 +1277,17 @@ SECURITY ALERT INVESTIGATION REPORT
 Alert ID: {state['alert_id']}
 Timestamp: {state['timestamp']}
 Alert Type: {alert_data.get('type', 'Unknown')}
+Severity: {severity}
+
+EXECUTIVE SUMMARY
+-----------------
+{executive_summary}
 
 THREAT ASSESSMENT
 -----------------
 Threat Score: {threat_score:.2f} / 1.00
 Attack Stage: {attack_stage}
-Threat Category: {state.get('threat_category', 'Unknown')}
+Threat Category: {threat_category}
 
 MITRE ATT&CK MAPPINGS
 ---------------------
@@ -1221,9 +1327,10 @@ Session: {state.get('session_id', 'unknown')}
     return {
         "current_agent": "communication",
         "report": report,
+        "executive_summary": executive_summary,  # NEW: LLM-generated summary
         "notifications_sent": notifications_sent,
         "workflow_status": "completed",
-        "messages": [AIMessage(content="Investigation report generated and notifications sent")]
+        "messages": [AIMessage(content="Investigation report with executive summary generated")]
     }
 
 
@@ -1498,9 +1605,19 @@ async def investigate_alert_streaming(alert_data: Dict[str, Any]):
                     
                     # Extract meaningful events from state changes
                     events = _extract_node_events(event_name, prev_state, current_state)
-                    
-                    # Yield each sub-event
+
+                    # Yield each sub-event as both state_update AND agent_message
                     for sub_event in events:
+                        # Emit as agent_message for the Agent Chat UI
+                        event_subtype = sub_event.get("type", "thinking")
+                        yield {
+                            "type": "agent_message" if event_subtype == "thinking" else event_subtype,
+                            "node": event_name,
+                            "message": sub_event["message"],
+                            "data": sub_event.get("data", {}),
+                            "state": current_state
+                        }
+                        # Also emit state_update for progress tracking
                         yield {
                             "type": "state_update",
                             "node": event_name,
@@ -1601,124 +1718,142 @@ def _extract_node_events(node_name: str, prev_state: Dict, current_state: Dict) 
 
     if node_name == "supervisor":
         # Supervisor routes the workflow
+        alert_id = current_state.get('alert_id', 'Unknown')
+        alert_type = current_state.get('alert_data', {}).get('type', 'unknown')
+        similar = current_state.get('similar_incidents', [])
+
         events.append({
-            "message": f"Alert {current_state.get('alert_id')} received and routed to enrichment",
-            "data": {"alert_type": current_state.get('alert_data', {}).get('type', 'unknown')}
+            "type": "thinking",
+            "message": f"Received alert {alert_id} (type: {alert_type}). Analyzing and routing to enrichment pipeline...",
+            "data": {"alert_type": alert_type}
         })
+
+        if similar:
+            events.append({
+                "type": "thinking",
+                "message": f"Found {len(similar)} similar past incidents in memory. This pattern has been seen before.",
+                "data": {"similar_count": len(similar)}
+            })
 
     elif node_name == "enrichment":
         # Check what data was enriched
         enrichment = current_state.get("enrichment_data", {})
+        source_ip = current_state.get("alert_data", {}).get("source_ip", "N/A")
 
-        # SIEM logs
-        siem_logs = enrichment.get("siem_logs", [])
-        if siem_logs:
+        # Show tool calls for SIEM
+        events.append({
+            "type": "tool_call",
+            "message": f"{len(enrichment.get('siem_logs', []))} events found",
+            "data": {"tool": "query_siem", "result": f"{len(enrichment.get('siem_logs', []))} events"}
+        })
+
+        # Show tool calls for Threat Intel
+        threat_intel = enrichment.get("threat_intel", {})
+        if threat_intel:
+            reputation = threat_intel.get("ip_reputation") or threat_intel.get("reputation", "unknown")
+            score = threat_intel.get("threat_score", 0)
+            source = threat_intel.get("source", "unknown")
             events.append({
-                "message": f"Found {len(siem_logs)} related events in SIEM",
-                "data": {"siem_event_count": len(siem_logs)}
+                "type": "tool_call",
+                "message": f"{reputation.upper()} (score: {score}/10) via {source}",
+                "data": {"tool": "get_threat_intel", "result": f"{reputation.upper()}"}
             })
         else:
             events.append({
-                "message": "No related events found in SIEM",
-                "data": {"siem_event_count": 0}
+                "type": "tool_call",
+                "message": "No threat data available",
+                "data": {"tool": "get_threat_intel", "result": "N/A"}
             })
 
-        # Threat intel
-        threat_intel = enrichment.get("threat_intel", {})
-        if threat_intel:
-            reputation = threat_intel.get("ip_reputation", "unknown")
-            confidence = threat_intel.get("confidence", 0)
+        # User activity
+        user_activity = enrichment.get("user_activity", {})
+        if user_activity:
+            total_events = user_activity.get("total_events", 0)
+            risk_level = user_activity.get("risk_level", "unknown")
             events.append({
-                "message": f"Threat Intel: IP reputation = {reputation.upper()} (confidence: {confidence}/10)",
-                "data": {"reputation": reputation, "confidence": confidence}
-            })
-
-        # User events
-        user_events = enrichment.get("user_events", {})
-        if user_events:
-            event_count = user_events.get("event_count", 0)
-            events.append({
-                "message": f"User has {event_count} security events in last 7 days",
-                "data": {"user_event_count": event_count}
+                "type": "tool_call",
+                "message": f"{total_events} events, risk: {risk_level.upper()}",
+                "data": {"tool": "get_user_events", "result": f"{total_events} events"}
             })
 
         # Endpoint data
         endpoint_data = enrichment.get("endpoint_data", {})
         if endpoint_data:
             hostname = endpoint_data.get("hostname", "unknown")
-            status = endpoint_data.get("endpoint_status", "unknown")
+            threats = endpoint_data.get("threats_detected", 0)
             events.append({
-                "message": f"Endpoint {hostname}: status = {status}",
-                "data": {"hostname": hostname, "status": status}
+                "type": "tool_call",
+                "message": f"{hostname}: {threats} threats detected",
+                "data": {"tool": "get_endpoint_data", "result": f"{threats} threats"}
             })
 
     elif node_name == "analysis":
-        # Check MITRE mappings
-        mitre_mappings = current_state.get("mitre_mappings", [])
-        if mitre_mappings:
-            events.append({
-                "message": f"Mapped to {len(mitre_mappings)} MITRE ATT&CK technique(s)",
-                "data": {"technique_count": len(mitre_mappings)}
-            })
-
-            # Show each technique
-            for mapping in mitre_mappings[:3]:  # Show first 3
-                technique_id = mapping.get("technique_id", "unknown")
-                technique_name = mapping.get("name", "unknown")
-                confidence = mapping.get("confidence", 0.0)
-                events.append({
-                    "message": f"  -> {technique_id}: {technique_name} (confidence: {confidence:.1%})",
-                    "data": {"technique": technique_id, "name": technique_name, "confidence": confidence}
-                })
-
-        # Threat score
+        # Threat score and attack stage - key outputs
         threat_score = current_state.get("threat_score", 0.0)
-        prev_score = prev_state.get("threat_score", 0.0)
-        if threat_score != prev_score:
-            events.append({
-                "message": f"Threat score calculated: {threat_score:.2f}/1.00",
-                "data": {"threat_score": threat_score}
-            })
-
-        # Attack stage
         attack_stage = current_state.get("attack_stage", "")
+        threat_category = current_state.get("threat_category", "")
+
+        # Severity label
+        if threat_score >= 0.7:
+            severity = "HIGH"
+        elif threat_score >= 0.4:
+            severity = "MEDIUM"
+        else:
+            severity = "LOW"
+
+        events.append({
+            "type": "thinking",
+            "message": f"Threat assessment complete: {severity} ({threat_score:.0%})",
+            "data": {"threat_score": threat_score, "severity": severity}
+        })
+
         if attack_stage:
             events.append({
-                "message": f"Attack stage: {attack_stage}",
+                "type": "thinking",
+                "message": f"Attack stage identified: {attack_stage}",
                 "data": {"attack_stage": attack_stage}
             })
 
-    elif node_name == "investigation":
-        # Investigation findings
-        findings = current_state.get("investigation_findings", {})
-        if findings:
+        # MITRE mappings
+        mitre_mappings = current_state.get("mitre_mappings", [])
+        if mitre_mappings:
+            techniques = ", ".join([m.get("technique_id", "?") for m in mitre_mappings[:3]])
             events.append({
-                "message": f"Deep investigation completed with {len(findings)} findings",
-                "data": {"finding_count": len(findings)}
+                "type": "thinking",
+                "message": f"MITRE ATT&CK: {techniques}" + (f" (+{len(mitre_mappings)-3} more)" if len(mitre_mappings) > 3 else ""),
+                "data": {"technique_count": len(mitre_mappings)}
             })
 
+    elif node_name == "investigation":
+        # Investigation is LLM-powered, so it shows streaming reasoning
+        # Just add a summary event
+        findings = current_state.get("investigation_findings", {})
+        events.append({
+            "type": "thinking",
+            "message": "Deep investigation complete. Evidence analyzed and attack patterns identified.",
+            "data": {"finding_count": len(findings) if findings else 0}
+        })
+
     elif node_name == "response":
-        # Recommendations
+        # Response is LLM-powered, so it shows streaming reasoning
+        # Add summary of recommendations
         recommendations = current_state.get("recommendations", [])
         if recommendations:
             events.append({
-                "message": f"Generated {len(recommendations)} remediation recommendation(s)",
+                "type": "thinking",
+                "message": f"Generated {len(recommendations)} remediation actions based on threat analysis.",
                 "data": {"recommendation_count": len(recommendations)}
             })
-
-            # Show first few recommendations
-            for i, rec in enumerate(recommendations[:2], 1):
-                events.append({
-                    "message": f"  {i}. {rec[:80]}{'...' if len(rec) > 80 else ''}",
-                    "data": {"recommendation": rec}
-                })
 
     elif node_name == "communication":
         # Report generation
         report = current_state.get("report", "")
         if report:
+            # Extract first line as summary
+            first_line = report.split('\n')[0][:100] if report else "Report generated"
             events.append({
-                "message": f"Investigation report generated ({len(report)} characters)",
+                "type": "thinking",
+                "message": f"Final report compiled. Ready for security team review.",
                 "data": {"report_length": len(report)}
             })
 
