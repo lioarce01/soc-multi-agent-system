@@ -1,7 +1,10 @@
 """
 Global CSS Styles
 Extracted from gradio_ui.py for modularity
+Enhanced with animations for visual impact
 """
+
+from ui.styles.animations import get_full_animation_css
 
 GLOBAL_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
@@ -447,6 +450,103 @@ label {
 /* === MICRO ANIMATIONS === */
 * {
     transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease !important;
+}
+
+/* === ENHANCED CARD HOVER EFFECTS === */
+#reasoning_card, #results_card, #memory_reasoning_card, #similar_incidents_card {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+#reasoning_card:hover, #results_card:hover {
+    transform: translateY(-2px);
+}
+
+/* === BUTTON HOVER ANIMATIONS === */
+#investigate_btn {
+    position: relative;
+    overflow: hidden;
+}
+
+#investigate_btn::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+    transition: left 0.5s ease;
+}
+
+#investigate_btn:hover::before {
+    left: 100%;
+}
+
+/* === PROGRESS BAR GLOW === */
+.progress-bar {
+    position: relative;
+}
+
+.progress-bar::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 20px;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3));
+    animation: progressShine 2s ease-in-out infinite;
+}
+
+@keyframes progressShine {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+}
+
+/* === AGENT COLORS FOR ACTIVE STATES === */
+.agent-supervisor-active { border-color: #3b82f6 !important; box-shadow: 0 0 15px rgba(59, 130, 246, 0.3) !important; }
+.agent-enrichment-active { border-color: #10b981 !important; box-shadow: 0 0 15px rgba(16, 185, 129, 0.3) !important; }
+.agent-analysis-active { border-color: #f59e0b !important; box-shadow: 0 0 15px rgba(245, 158, 11, 0.3) !important; }
+.agent-investigation-active { border-color: #8b5cf6 !important; box-shadow: 0 0 15px rgba(139, 92, 246, 0.3) !important; }
+.agent-response-active { border-color: #ef4444 !important; box-shadow: 0 0 15px rgba(239, 68, 68, 0.3) !important; }
+.agent-communication-active { border-color: #06b6d4 !important; box-shadow: 0 0 15px rgba(6, 182, 212, 0.3) !important; }
+.agent-memory-active { border-color: #ec4899 !important; box-shadow: 0 0 15px rgba(236, 72, 153, 0.3) !important; }
+
+/* === STATUS PANEL ANIMATIONS (moved from dynamic HTML) === */
+@keyframes successGlow {
+    0%, 100% { box-shadow: 0 0 12px rgba(16, 185, 129, 0.4); }
+    50% { box-shadow: 0 0 20px rgba(16, 185, 129, 0.6); }
+}
+
+@keyframes fadeInUp {
+    from { transform: translateY(5px); opacity: 0.5; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+/* Agent-specific pulse animations for status panel */
+@keyframes pulse-ring-supervisor {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.6); }
+    50% { box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
+}
+@keyframes pulse-ring-enrichment {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
+    50% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+}
+@keyframes pulse-ring-analysis {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6); }
+    50% { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0); }
+}
+@keyframes pulse-ring-investigation {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.6); }
+    50% { box-shadow: 0 0 0 6px rgba(139, 92, 246, 0); }
+}
+@keyframes pulse-ring-response {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); }
+    50% { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+}
+@keyframes pulse-ring-communication {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(6, 182, 212, 0.6); }
+    50% { box-shadow: 0 0 0 6px rgba(6, 182, 212, 0); }
 }
 """
 

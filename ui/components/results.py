@@ -1,14 +1,17 @@
 """
 Results Component
 Investigation results display with threat score, MITRE mappings, and recommendations
+Enhanced with animations for visual impact
 """
 
 from typing import Dict, Any
+import html as html_lib
 
 
 def format_results_html(result: Dict[str, Any]) -> str:
     """
     Format investigation results as structured HTML (XSS-safe)
+    With animated threat score and enhanced visual effects
 
     Args:
         result: Investigation results dictionary (already sanitized)
@@ -17,24 +20,33 @@ def format_results_html(result: Dict[str, Any]) -> str:
         HTML formatted results
     """
     threat_score = result.get("threat_score", 0.0)
+    threat_score_pct = int(threat_score * 100)
 
-    # Determine threat level colors
+    # Determine threat level colors and animations
     if threat_score >= 0.90:
         threat_color = "#ef4444"  # red
         threat_glow = "0 0 20px rgba(239, 68, 68, 0.5)"
         threat_label = "CRITICAL"
+        threat_animation = "animation: threat-critical 1s ease-in-out infinite;"
+        shake_class = "animate-shake"
     elif threat_score >= 0.70:
         threat_color = "#f97316"  # orange
         threat_glow = "0 0 20px rgba(249, 115, 22, 0.5)"
         threat_label = "HIGH"
+        threat_animation = "animation: threat-high 2s ease-in-out infinite;"
+        shake_class = ""
     elif threat_score >= 0.50:
         threat_color = "#eab308"  # yellow
         threat_glow = "0 0 20px rgba(234, 179, 8, 0.5)"
         threat_label = "MEDIUM"
+        threat_animation = "animation: threat-medium 2.5s ease-in-out infinite;"
+        shake_class = ""
     else:
-        threat_color = "#ffffff"  # white
-        threat_glow = "0 0 20px rgba(255, 255, 255, 0.4)"
+        threat_color = "#10b981"  # green for low (changed from white)
+        threat_glow = "0 0 20px rgba(16, 185, 129, 0.4)"
         threat_label = "LOW"
+        threat_animation = "animation: threat-low 3s ease-in-out infinite;"
+        shake_class = ""
 
     # Get escalation status
     escalation_badge = ""
@@ -74,7 +86,48 @@ def format_results_html(result: Dict[str, Any]) -> str:
     if not actions_html:
         actions_html = "<div style='color: #71717a; font-style: italic; font-family: monospace;'>[!] No recommended actions available</div>"
 
+    # Note: JavaScript animations don't work in Gradio's dynamic HTML
+    # Using CSS-only animations for threat score display
     html_result = f"""
+    <style>
+        /* Threat level animations */
+        @keyframes threat-low {{
+            0%, 100% {{ box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.8), 0 0 10px rgba(16, 185, 129, 0.3); }}
+            50% {{ box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.8), 0 0 20px rgba(16, 185, 129, 0.5); }}
+        }}
+        @keyframes threat-medium {{
+            0%, 100% {{ box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.8), 0 0 10px rgba(234, 179, 8, 0.3); }}
+            50% {{ box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.8), 0 0 25px rgba(234, 179, 8, 0.6); }}
+        }}
+        @keyframes threat-high {{
+            0%, 100% {{ box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.8), 0 0 15px rgba(249, 115, 22, 0.4); }}
+            50% {{ box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.8), 0 0 30px rgba(249, 115, 22, 0.7); }}
+        }}
+        @keyframes threat-critical {{
+            0%, 100% {{
+                box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.8), 0 0 20px rgba(239, 68, 68, 0.5);
+                transform: scale(1);
+            }}
+            50% {{
+                box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.8), 0 0 40px rgba(239, 68, 68, 0.8);
+                transform: scale(1.01);
+            }}
+        }}
+        @keyframes fadeInScale {{
+            from {{ transform: scale(0.8); opacity: 0; }}
+            to {{ transform: scale(1); opacity: 1; }}
+        }}
+        @keyframes shake {{
+            0%, 100% {{ transform: translateX(0); }}
+            10%, 30%, 50%, 70%, 90% {{ transform: translateX(-2px); }}
+            20%, 40%, 60%, 80% {{ transform: translateX(2px); }}
+        }}
+        .animate-shake {{ animation: shake 0.5s ease-in-out; }}
+        @keyframes scoreReveal {{
+            from {{ opacity: 0; transform: scale(0.8); }}
+            to {{ opacity: 1; transform: scale(1); }}
+        }}
+    </style>
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 0; background: #000; border-radius: 0; color: #e4e4e7;">
 
         <!-- Header -->
@@ -91,14 +144,16 @@ def format_results_html(result: Dict[str, Any]) -> str:
             </div>
         </div>
 
-        <!-- Threat Score Card -->
-        <div style="background: linear-gradient(135deg, #0a0a0a 0%, #000 100%);
-                    border: 1px solid {threat_color}; border-radius: 0; padding: 24px; margin: 0; box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.8), {threat_glow};">
+        <!-- Threat Score Card with Animation -->
+        <div class="{shake_class}" style="background: linear-gradient(135deg, #0a0a0a 0%, #000 100%);
+                    border: 1px solid {threat_color}; border-radius: 0; padding: 24px; margin: 0;
+                    box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.8), {threat_glow};
+                    {threat_animation}">
             <div style="display: flex; align-items: center; justify-content: space-between;">
                 <div>
                     <div style="color: #71717a; font-size: 0.75rem; font-weight: 700; margin-bottom: 8px; font-family: 'Courier New', monospace; letter-spacing: 0.1em;">THREAT_SCORE</div>
-                    <div style="font-size: 3.5rem; font-weight: 700; color: {threat_color}; font-family: 'Courier New', monospace; text-shadow: {threat_glow};">
-                        {int(threat_score * 100)}<span style="font-size: 1.5rem;">%</span>
+                    <div style="font-size: 3.5rem; font-weight: 700; color: {threat_color}; font-family: 'Courier New', monospace; text-shadow: {threat_glow}; animation: scoreReveal 0.6s ease-out forwards;">
+                        {threat_score_pct}<span style="font-size: 1.5rem;">%</span>
                     </div>
                     <div style="color: #71717a; font-size: 0.8rem; margin-top: 8px; font-family: 'Courier New', monospace;">
                         > STAGE: <span style="color: #a1a1aa;">{result.get('attack_stage', 'Unknown').upper()}</span>
@@ -106,7 +161,9 @@ def format_results_html(result: Dict[str, Any]) -> str:
                 </div>
                 <div style="text-align: right;">
                     <div style="background-color: {threat_color}; color: #000;
-                                padding: 10px 24px; border-radius: 2px; font-size: 1.1rem; font-weight: 900; margin-bottom: 10px; font-family: 'Courier New', monospace; letter-spacing: 0.1em; box-shadow: {threat_glow};">
+                                padding: 10px 24px; border-radius: 2px; font-size: 1.1rem; font-weight: 900; margin-bottom: 10px;
+                                font-family: 'Courier New', monospace; letter-spacing: 0.1em; box-shadow: {threat_glow};
+                                animation: fadeInScale 0.5s ease-out forwards;">
                         {threat_label}
                     </div>
                     <div style="color: #71717a; font-size: 0.8rem; font-family: 'Courier New', monospace;">

@@ -14,10 +14,28 @@ IMPROVEMENTS:
 import json
 import html
 import time
+import logging
+import sys
 from pathlib import Path
 from datetime import datetime
 from typing import AsyncGenerator, Tuple, Dict, Any, List, Optional
 import gradio as gr
+
+# Suppress benign Windows asyncio connection reset errors
+# These occur during normal MCP connection cleanup and are harmless
+class WindowsAsyncioFilter(logging.Filter):
+    """Filter out harmless Windows asyncio ConnectionResetError messages"""
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Suppress WinError 10054 (connection forcibly closed)
+        if "WinError 10054" in str(record.msg):
+            return False
+        if "_call_connection_lost" in str(record.msg):
+            return False
+        return True
+
+# Apply filter to asyncio logger
+asyncio_logger = logging.getLogger("asyncio")
+asyncio_logger.addFilter(WindowsAsyncioFilter())
 
 from src.graph import investigate_alert_streaming as graph_streaming
 from src.state import create_initial_state
@@ -129,6 +147,9 @@ async def investigate_alert_streaming_v2(
     current_streaming_content = ""  # For token-by-token streaming
     current_streaming_agent = None
 
+    # Cache for status HTML to prevent flicker during token streaming
+    cached_status_html = _get_initial_status_compact_html()
+
     # Agent configuration with colors and emojis
     agent_config = {
         "supervisor": {"emoji": "🎯", "color": "#3b82f6", "name": "SUPERVISOR"},
@@ -235,19 +256,20 @@ async def investigate_alert_streaming_v2(
                     streaming_content=display_content,
                     agent_config=agent_config
                 )
-                
+
                 # Yield with updated reasoning (REAL-TIME TOKEN STREAMING)
-                # Extract memory data from accumulated state
+                # IMPORTANT: Use cached_status_html to prevent flicker!
+                # Status panel doesn't need to update on each token
                 memory_reasoning = accumulated_state.get("memory_reasoning", "")
                 similar_incidents = accumulated_state.get("similar_incidents", [])
                 campaign_info = accumulated_state.get("campaign_info")
-                
+
                 memory_reasoning_md = memory_reasoning if memory_reasoning else "*No memory reasoning available yet.*"
                 similar_incidents_html = format_similar_incidents_html(similar_incidents)
                 campaign_alert_html = format_campaign_alert_html(campaign_info)
-                
+
                 yield (
-                    _get_status_compact_html(current_node or "supervisor", completed_nodes, skipped_nodes, current_progress, time.time() - start_time),
+                    cached_status_html,  # Use cached status to prevent flicker
                     chat_html,  # Agent Chat with live streaming
                     "",  # No HTML results yet
                     memory_reasoning_md,  # Memory reasoning
@@ -336,11 +358,15 @@ async def investigate_alert_streaming_v2(
                 if event_type == "node_start":
                     # Set progress to slightly before node completion
                     current_progress = max(node_progress_map[node]["pct"] - 8, current_progress)
+                    # Update cached status HTML on state change
+                    cached_status_html = _get_status_compact_html(current_node, completed_nodes, skipped_nodes, current_progress, time.time() - start_time)
                 elif event_type == "node_complete":
                     # Set progress to node's target percentage
                     current_progress = node_progress_map[node]["pct"]
                     completed_nodes.append(node)
                     previous_node = node  # Track for skip detection
+                    # Update cached status HTML on state change
+                    cached_status_html = _get_status_compact_html(current_node, completed_nodes, skipped_nodes, current_progress, time.time() - start_time)
 
             # Add activity log (sanitize message)
             activity_log_lines.append(_format_activity_log(
@@ -377,7 +403,7 @@ async def investigate_alert_streaming_v2(
             campaign_alert_html = format_campaign_alert_html(campaign_info)
 
             yield (
-                _get_status_compact_html(current_node or "supervisor", completed_nodes, skipped_nodes, current_progress, time.time() - start_time),
+                cached_status_html,  # Use cached status to prevent flicker
                 chat_html,  # Agent Chat
                 "",  # No HTML results yet
                 memory_reasoning_md,  # Memory reasoning

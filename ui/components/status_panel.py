@@ -1,9 +1,19 @@
 """
 Status Panel Component
-Vertical stepper workflow with progress tracking
+Vertical stepper workflow with progress tracking and animations
 """
 
 from typing import List, Optional
+
+# Agent colors for visual identity
+AGENT_COLORS = {
+    "supervisor": "#3b82f6",
+    "enrichment": "#10b981",
+    "analysis": "#f59e0b",
+    "investigation": "#8b5cf6",
+    "response": "#ef4444",
+    "communication": "#06b6d4",
+}
 
 
 def get_initial_status_compact_html() -> str:
@@ -131,7 +141,7 @@ def get_status_compact_html(
 ) -> str:
     """
     Generate updated status with vertical step-by-step workflow
-    Shows execution order and current progress
+    Shows execution order and current progress with animations
 
     Args:
         current_node: Currently executing node
@@ -154,70 +164,99 @@ def get_status_compact_html(
         (6, "communication", "Communication")
     ]
 
-    # Progress bar styling
+    # Progress bar styling with enhanced animations
     if progress_pct >= 100:
         bar_gradient = "linear-gradient(90deg, #10b981 0%, #059669 100%)"
         bar_shadow = "0 0 12px rgba(16, 185, 129, 0.4)"
+        bar_animation = "animation: successGlow 2s ease-in-out infinite;"
     elif progress_pct >= 50:
         bar_gradient = "linear-gradient(90deg, #e8e8e8 0%, #999999 100%)"
         bar_shadow = "0 0 10px rgba(232, 232, 232, 0.2)"
+        bar_animation = ""
     else:
         bar_gradient = "linear-gradient(90deg, #666666 0%, #444444 100%)"
         bar_shadow = "0 0 8px rgba(102, 102, 102, 0.2)"
+        bar_animation = ""
 
-    # Build vertical steps
+    # Build vertical steps with enhanced styling
     steps_html = ""
     for step_num, node_id, label in nodes:
-        # Determine step state
+        agent_color = AGENT_COLORS.get(node_id, "#666666")
+
+        # Determine step state with agent-specific colors
         if node_id in completed_nodes:
-            # Completed
-            circle_bg = "#000000"
-            circle_border = "2px solid #10b981"
-            circle_content = "✓"
-            circle_color = "#10b981"
+            # Completed - green checkmark with agent accent
+            circle_style = f"""
+                background: linear-gradient(135deg, {agent_color}22 0%, #000000 100%);
+                border: 2px solid #10b981;
+                box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+            """
+            circle_content = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>'
             title_color = "#10b981"
             status_text = "Completed"
             status_color = "#059669"
+            row_animation = ""
         elif node_id == current_node:
-            # In Progress
-            circle_bg = "#1a1a1a"
-            circle_border = "2px solid #e8e8e8"
-            circle_content = str(step_num)
-            circle_color = "#e8e8e8"
-            title_color = "#e8e8e8"
+            # In Progress - pulsing with agent color
+            circle_style = f"""
+                background: {agent_color}22;
+                border: 2px solid {agent_color};
+                box-shadow: 0 0 0 0 {agent_color}66;
+                animation: pulse-ring-{node_id} 1.5s ease-in-out infinite;
+            """
+            circle_content = f'<span style="color: {agent_color}; font-size: 0.75rem; font-weight: 700;">{step_num}</span>'
+            title_color = agent_color
             status_text = "In Progress..."
-            status_color = "#999999"
+            status_color = agent_color
+            row_animation = f"animation: fadeInUp 0.3s ease-out;"
         elif node_id in skipped_nodes:
-            # Skipped
-            circle_bg = "#000000"
-            circle_border = "2px solid #666666"
-            circle_content = "−"
-            circle_color = "#666666"
+            # Skipped - dashed border
+            circle_style = """
+                background: #000000;
+                border: 2px dashed #444444;
+            """
+            circle_content = '<span style="color: #666666; font-size: 0.9rem;">−</span>'
             title_color = "#666666"
             status_text = "Skipped"
             status_color = "#444444"
+            row_animation = ""
         else:
-            # Pending
-            circle_bg = "#000000"
-            circle_border = "2px solid #333333"
-            circle_content = str(step_num)
-            circle_color = "#666666"
+            # Pending - dimmed
+            circle_style = """
+                background: #000000;
+                border: 2px solid #333333;
+            """
+            circle_content = f'<span style="color: #666666; font-size: 0.7rem;">{step_num}</span>'
             title_color = "#666666"
             status_text = "Pending"
             status_color = "#444444"
+            row_animation = ""
 
         is_last = (step_num == 6)
         margin_bottom = "0" if is_last else "14px"
 
+        # Add connecting line for non-last items
+        connector = ""
+        if not is_last:
+            next_node = nodes[step_num][1] if step_num < len(nodes) else None
+            line_color = "#10b981" if node_id in completed_nodes else "#1a1a1a"
+            connector = f'<div style="position: absolute; left: 11px; top: 28px; width: 2px; height: 12px; background: {line_color};"></div>'
+
         steps_html += f"""
-        <div style="display: flex; align-items: flex-start; margin-bottom: {margin_bottom};">
-            <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; border: {circle_border}; display: flex; align-items: center; justify-content: center; background: {circle_bg}; margin-right: 12px; color: {circle_color}; font-size: 0.7rem; font-weight: 600;">{circle_content}</div>
+        <div style="display: flex; align-items: flex-start; margin-bottom: {margin_bottom}; position: relative; {row_animation}" data-agent="{node_id}">
+            <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 12px; {circle_style} transition: all 0.3s ease;">
+                {circle_content}
+            </div>
+            {connector}
             <div style="flex: 1;">
-                <div style="font-size: 0.75rem; color: {title_color}; font-weight: 500;">{label}</div>
-                <div style="font-size: 0.65rem; color: {status_color}; margin-top: 2px;">{status_text}</div>
+                <div style="font-size: 0.75rem; color: {title_color}; font-weight: 500; transition: color 0.3s ease;">{label}</div>
+                <div style="font-size: 0.65rem; color: {status_color}; margin-top: 2px; transition: color 0.3s ease;">{status_text}</div>
             </div>
         </div>
         """
+
+    # Note: Keyframe animations are in global CSS (ui/styles/css.py)
+    # This prevents flicker from re-parsing styles on each update
 
     return f"""
     <div style="font-family: 'JetBrains Mono', monospace;">
@@ -227,9 +266,9 @@ def get_status_compact_html(
             <span style="font-size: 0.8rem; color: #e8e8e8; font-weight: 600;">{progress_pct}%</span>
         </div>
 
-        <!-- Progress Bar -->
-        <div style="background: #0a0a0a; border: 1px solid #1a1a1a; height: 6px; border-radius: 4px; overflow: hidden; margin-bottom: 20px;">
-            <div style="background: {bar_gradient}; width: {progress_pct}%; height: 100%; transition: width 0.5s ease; box-shadow: {bar_shadow};"></div>
+        <!-- Progress Bar with shine effect -->
+        <div style="background: #0a0a0a; border: 1px solid #1a1a1a; height: 6px; border-radius: 4px; overflow: hidden; margin-bottom: 20px; position: relative;">
+            <div style="background: {bar_gradient}; width: {progress_pct}%; height: 100%; transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: {bar_shadow}; {bar_animation}"></div>
         </div>
 
         <!-- Workflow Steps (Vertical) -->

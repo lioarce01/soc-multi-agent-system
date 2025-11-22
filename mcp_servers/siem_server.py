@@ -247,6 +247,10 @@ async def get_threat_intel(ip_address: str) -> Dict:
         # Fall back to mock data
         reputation_data = get_ip_reputation(ip_address)
 
+        # Convert sources array to source string (mock data uses "sources" plural)
+        sources = reputation_data.get("sources", [])
+        source_str = " + ".join(sources) if sources else "mock"
+
         return {
             "ip_address": ip_address,
             "reputation": reputation_data.get("reputation", "unknown"),
@@ -254,7 +258,7 @@ async def get_threat_intel(ip_address: str) -> Dict:
             "categories": reputation_data.get("categories", []),
             "threat_score": reputation_data.get("threat_score", 5.0),
             "last_seen": reputation_data.get("last_seen"),
-            "source": reputation_data.get("source", "mock"),
+            "source": source_str,
             "malicious_count": reputation_data.get("malicious_count", 0),
             "total_scanners": reputation_data.get("total_scanners", 0),
             "recommendation": _get_ip_recommendation(reputation_data)

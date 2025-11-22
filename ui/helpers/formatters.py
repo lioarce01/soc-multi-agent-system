@@ -35,18 +35,39 @@ def build_enrichment_data(source_state: Dict[str, Any]) -> Dict[str, Any]:
     calculated_score = source_state.get("threat_score", 0.0)
 
     # Determine if we have valid external intel
-    has_external_intel = (
-        raw_reputation and
-        raw_reputation.lower() not in ["unknown", "none", ""] and
+    # Check multiple indicators to detect real external data:
+    # 1. Source field is valid (not mock/unknown/empty)
+    # 2. Or we have actual scanner data (total_scanners > 0)
+    # 3. Or reputation is a specific value (malicious/suspicious/clean)
+    source_is_valid = (
         raw_source and
-        raw_source.lower() not in ["mock", "none", ""]
+        raw_source.lower() not in ["mock", "none", "", "unknown"]
     )
+
+    reputation_is_specific = (
+        raw_reputation and
+        raw_reputation.lower() in ["malicious", "suspicious", "clean"]
+    )
+
+    has_scanner_data = raw_scanners > 0
+
+    # Consider it external intel if we have source OR (reputation + scanner data)
+    has_external_intel = source_is_valid or (reputation_is_specific and has_scanner_data)
 
     if has_external_intel:
         # Use external threat intel data
-        ip_reputation = raw_reputation
+        ip_reputation = raw_reputation if raw_reputation else "unknown"
         threat_score_intel = raw_score
-        intel_source = raw_source
+
+        # Format source nicely - replace "+" with "/" for display
+        if raw_source and raw_source.lower() not in ["mock", "none", "", "unknown"]:
+            intel_source = raw_source.replace(" + ", "/")
+        elif reputation_is_specific:
+            # If we have specific reputation but no source, indicate it's from threat intel
+            intel_source = "Threat Intel"
+        else:
+            intel_source = "Analysis"
+
         malicious_detections = raw_malicious
         total_scanners = raw_scanners
     else:

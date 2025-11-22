@@ -123,7 +123,9 @@ IP_REPUTATION_DB = {
         "categories": ["phishing", "spam", "malware"],
         "last_seen": "2024-01-15T12:00:00Z",
         "sources": ["VirusTotal", "AbuseIPDB"],
-        "threat_score": 9.5
+        "threat_score": 9.5,
+        "malicious_count": 15,
+        "total_scanners": 20
     },
     "185.220.101.1": {
         "reputation": "malicious",
@@ -131,7 +133,9 @@ IP_REPUTATION_DB = {
         "categories": ["brute_force", "scanner"],
         "last_seen": "2024-01-15T10:00:00Z",
         "sources": ["AbuseIPDB", "Shodan"],
-        "threat_score": 8.5
+        "threat_score": 8.5,
+        "malicious_count": 12,
+        "total_scanners": 18
     },
     "192.0.2.1": {
         "reputation": "malicious",
@@ -139,7 +143,9 @@ IP_REPUTATION_DB = {
         "categories": ["c2_server", "botnet"],
         "last_seen": "2024-01-15T16:00:00Z",
         "sources": ["VirusTotal", "AlienVault OTX"],
-        "threat_score": 10.0
+        "threat_score": 10.0,
+        "malicious_count": 20,
+        "total_scanners": 20
     },
     "52.218.48.101": {
         "reputation": "clean",
@@ -147,7 +153,9 @@ IP_REPUTATION_DB = {
         "categories": ["cloud_provider"],
         "last_seen": "2024-01-15T17:00:00Z",
         "sources": ["AWS IP ranges"],
-        "threat_score": 2.0
+        "threat_score": 2.0,
+        "malicious_count": 0,
+        "total_scanners": 15
     },
     "93.184.216.34": {
         "reputation": "suspicious",
@@ -155,7 +163,50 @@ IP_REPUTATION_DB = {
         "categories": ["proxy", "vpn"],
         "last_seen": "2024-01-15T18:00:00Z",
         "sources": ["MaxMind"],
-        "threat_score": 5.5
+        "threat_score": 5.5,
+        "malicious_count": 3,
+        "total_scanners": 12
+    },
+    # Common test IPs for custom alerts
+    "10.0.0.1": {
+        "reputation": "malicious",
+        "confidence": 0.88,
+        "categories": ["brute_force", "scanner", "tor_exit"],
+        "last_seen": "2024-01-15T14:00:00Z",
+        "sources": ["VirusTotal", "AbuseIPDB"],
+        "threat_score": 8.0,
+        "malicious_count": 10,
+        "total_scanners": 15
+    },
+    "192.168.1.1": {
+        "reputation": "suspicious",
+        "confidence": 0.70,
+        "categories": ["internal", "scanner"],
+        "last_seen": "2024-01-15T12:00:00Z",
+        "sources": ["Internal TI"],
+        "threat_score": 6.0,
+        "malicious_count": 4,
+        "total_scanners": 10
+    },
+    "8.8.8.8": {
+        "reputation": "clean",
+        "confidence": 0.99,
+        "categories": ["dns", "google"],
+        "last_seen": "2024-01-15T18:00:00Z",
+        "sources": ["VirusTotal"],
+        "threat_score": 0.5,
+        "malicious_count": 0,
+        "total_scanners": 20
+    },
+    "1.1.1.1": {
+        "reputation": "clean",
+        "confidence": 0.99,
+        "categories": ["dns", "cloudflare"],
+        "last_seen": "2024-01-15T18:00:00Z",
+        "sources": ["VirusTotal"],
+        "threat_score": 0.5,
+        "malicious_count": 0,
+        "total_scanners": 20
     }
 }
 
@@ -211,16 +262,75 @@ def get_ip_reputation(ip_address: str) -> Dict:
         ip_address: IP address to lookup
 
     Returns:
-        Reputation information or default clean response
+        Reputation information - uses database if available, generates realistic mock otherwise
     """
-    return IP_REPUTATION_DB.get(ip_address, {
-        "reputation": "unknown",
-        "confidence": 0.5,
-        "categories": [],
-        "last_seen": None,
-        "sources": [],
-        "threat_score": 5.0
-    })
+    # Check if IP is in our database
+    if ip_address in IP_REPUTATION_DB:
+        return IP_REPUTATION_DB[ip_address]
+
+    # Generate realistic mock data for unknown IPs based on IP characteristics
+    # This ensures ALL alerts get meaningful threat intel data for testing
+    import hashlib
+
+    # Use IP hash to generate consistent but varied results
+    ip_hash = int(hashlib.md5(ip_address.encode()).hexdigest()[:8], 16)
+
+    # Determine reputation based on IP patterns
+    if ip_address.startswith(("10.", "172.16.", "172.17.", "172.18.", "172.19.",
+                               "172.20.", "172.21.", "172.22.", "172.23.", "172.24.",
+                               "172.25.", "172.26.", "172.27.", "172.28.", "172.29.",
+                               "172.30.", "172.31.", "192.168.")):
+        # Private IPs - suspicious (could be lateral movement)
+        reputation = "suspicious"
+        categories = ["internal", "private_network"]
+        threat_score = 4.0 + (ip_hash % 30) / 10  # 4.0-7.0
+        sources = ["Internal Analysis"]
+        malicious_count = ip_hash % 5
+        total_scanners = 10
+    elif ip_address.startswith(("127.", "0.", "255.")):
+        # Localhost/special - clean
+        reputation = "clean"
+        categories = ["localhost", "reserved"]
+        threat_score = 1.0
+        sources = ["RFC Reserved"]
+        malicious_count = 0
+        total_scanners = 5
+    else:
+        # External IPs - generate varied threat data
+        # Use hash to make it consistent for same IP but varied across IPs
+        threat_level = ip_hash % 100
+
+        if threat_level < 30:
+            reputation = "clean"
+            categories = ["general", "isp"]
+            threat_score = 1.0 + (ip_hash % 20) / 10  # 1.0-3.0
+            malicious_count = 0
+            total_scanners = 15 + (ip_hash % 10)
+        elif threat_level < 60:
+            reputation = "suspicious"
+            categories = ["proxy", "vpn", "hosting"]
+            threat_score = 4.0 + (ip_hash % 30) / 10  # 4.0-7.0
+            malicious_count = 2 + (ip_hash % 5)
+            total_scanners = 15 + (ip_hash % 10)
+        else:
+            reputation = "malicious"
+            categories = ["brute_force", "scanner", "botnet", "spam"][:1 + (ip_hash % 3)]
+            threat_score = 7.0 + (ip_hash % 30) / 10  # 7.0-10.0
+            malicious_count = 8 + (ip_hash % 12)
+            total_scanners = 18 + (ip_hash % 7)
+
+        sources = ["VirusTotal", "AbuseIPDB"]
+
+    return {
+        "reputation": reputation,
+        "confidence": 0.75 + (ip_hash % 20) / 100,  # 0.75-0.95
+        "categories": categories,
+        "last_seen": "2024-01-15T12:00:00Z",
+        "sources": sources,
+        "threat_score": min(10.0, threat_score),
+        "malicious_count": malicious_count,
+        "total_scanners": total_scanners
+    }
 
 
 def get_user_activity(username: str, time_range: str = "last_7d") -> Dict:

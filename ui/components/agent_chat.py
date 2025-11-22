@@ -105,7 +105,7 @@ def format_agent_chat_html(
     if current_group:
         html_parts.append(render_agent_group(current_agent, current_group))
 
-    # Add streaming content if active
+    # Add streaming content if active with enhanced animations
     if streaming_agent and streaming_content:
         config = agent_config.get(streaming_agent, {"emoji": "🤖", "color": "#666", "name": streaming_agent.upper()})
         emoji = config["emoji"]
@@ -115,23 +115,46 @@ def format_agent_chat_html(
         # Convert markdown to HTML for streaming content too
         formatted_content = markdown_to_html(streaming_content)
         html_parts.append(f"""
-        <div style="margin-bottom: 16px; border-left: 3px solid {color}; padding-left: 12px;">
+        <div data-agent="{streaming_agent}" style="margin-bottom: 16px; border-left: 3px solid {color}; padding-left: 12px;
+                    background: linear-gradient(90deg, {color}08 0%, transparent 100%);
+                    border-radius: 0 8px 8px 0; padding: 12px 12px 12px 16px;
+                    animation: fadeInUp 0.3s ease-out;">
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-                <span style="font-size: 1.2rem;">{emoji}</span>
+                <span style="font-size: 1.2rem; animation: pulse-emoji 1.5s ease-in-out infinite;">{emoji}</span>
                 <span style="color: {color}; font-weight: 700; font-size: 0.85rem; letter-spacing: 0.05em;">{name}</span>
-                <span style="color: #888; font-size: 0.7rem; animation: pulse 1s infinite;">● thinking...</span>
+                <div style="display: flex; align-items: center; gap: 6px; margin-left: 8px;">
+                    <span style="width: 8px; height: 8px; background: {color}; border-radius: 50%; animation: pulse-dot 1s ease-in-out infinite; box-shadow: 0 0 8px {color};"></span>
+                    <span style="color: {color}; font-size: 0.7rem; font-weight: 500;">thinking...</span>
+                </div>
             </div>
             <div style="color: #e0e0e0; font-size: 0.85rem; line-height: 1.6;">
-                {formatted_content}<span style="color: {color}; animation: blink 0.5s infinite;">█</span>
+                {formatted_content}<span style="color: {color}; animation: blink 0.5s infinite; text-shadow: 0 0 8px {color};">█</span>
             </div>
         </div>
         """)
 
-    # Styles only - no inner scroll container (let #reasoning_panel CSS handle scroll)
+    # Styles with enhanced animations
     return f"""
     <style>
         @keyframes blink {{ 0%, 50% {{ opacity: 1; }} 51%, 100% {{ opacity: 0; }} }}
         @keyframes pulse {{ 0%, 100% {{ opacity: 1; }} 50% {{ opacity: 0.5; }} }}
+        @keyframes pulse-emoji {{
+            0%, 100% {{ transform: scale(1); }}
+            50% {{ transform: scale(1.1); }}
+        }}
+        @keyframes pulse-dot {{
+            0%, 100% {{ transform: scale(1); opacity: 1; }}
+            50% {{ transform: scale(1.3); opacity: 0.7; }}
+        }}
+        @keyframes fadeInUp {{
+            from {{ transform: translateY(8px); opacity: 0; }}
+            to {{ transform: translateY(0); opacity: 1; }}
+        }}
+        @keyframes toolCall {{
+            0% {{ border-color: currentColor; }}
+            50% {{ border-color: transparent; }}
+            100% {{ border-color: currentColor; }}
+        }}
     </style>
     <div style="font-family: 'Inter', -apple-system, sans-serif; padding: 16px; background: transparent; border-radius: 8px;">
         {''.join(html_parts)}
