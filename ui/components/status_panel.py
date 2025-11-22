@@ -18,77 +18,77 @@ AGENT_COLORS = {
 
 def get_initial_status_compact_html() -> str:
     """
-    Generate initial status with vertical step-by-step workflow
+    Generate initial status with vertical step-by-step workflow (Bento style)
     """
     return """
-    <div style="font-family: 'JetBrains Mono', monospace;">
+    <div style="font-family: var(--font-mono, 'JetBrains Mono', monospace);">
         <!-- Progress Header -->
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <span style="font-size: 0.7rem; color: #999999; font-weight: 500; letter-spacing: 0.05em;">PROGRESS</span>
-            <span style="font-size: 0.8rem; color: #e8e8e8; font-weight: 600;">0%</span>
+            <span style="font-size: 0.7rem; color: var(--text-secondary, #71717a); font-weight: 500; letter-spacing: 0.1em;">PROGRESS</span>
+            <span style="font-size: 0.8rem; color: var(--text-primary, #ffffff); font-weight: 600;">0%</span>
         </div>
 
-        <!-- Progress Bar -->
-        <div style="background: #0a0a0a; border: 1px solid #1a1a1a; height: 6px; border-radius: 4px; overflow: hidden; margin-bottom: 20px;">
-            <div style="background: linear-gradient(90deg, #e8e8e8 0%, #999999 100%); width: 0%; height: 100%; transition: width 0.5s ease;"></div>
+        <!-- Progress Bar (Bento style) -->
+        <div style="background: var(--bg-elevated, #111111); border: 1px solid var(--border-subtle, #1a1a1a); height: 6px; border-radius: 9999px; overflow: hidden; margin-bottom: 20px;">
+            <div style="background: var(--border-subtle, #1a1a1a); width: 0%; height: 100%; transition: width 0.5s ease; border-radius: 9999px;"></div>
         </div>
 
-        <!-- Workflow Steps (Vertical) -->
+        <!-- Workflow Steps (Vertical - Bento) -->
         <div style="margin-top: 16px;">
             <div style="display: flex; align-items: flex-start; margin-bottom: 14px;">
-                <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #333333; display: flex; align-items: center; justify-content: center; background: #000000; margin-right: 12px; font-size: 0.7rem;">1</div>
+                <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--border-subtle, #1a1a1a); display: flex; align-items: center; justify-content: center; background: var(--bg-surface, #0a0a0a); margin-right: 12px; font-size: 0.7rem; color: var(--text-tertiary, #52525b);">1</div>
                 <div style="flex: 1;">
-                    <div style="font-size: 0.75rem; color: #666666; font-weight: 500;">Supervisor</div>
-                    <div style="font-size: 0.65rem; color: #444444; margin-top: 2px;">Pending</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary, #71717a); font-weight: 500;">Supervisor</div>
+                    <div style="font-size: 0.65rem; color: var(--text-tertiary, #52525b); margin-top: 2px;">Pending</div>
                 </div>
             </div>
 
             <div style="display: flex; align-items: flex-start; margin-bottom: 14px;">
-                <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #333333; display: flex; align-items: center; justify-content: center; background: #000000; margin-right: 12px; font-size: 0.7rem;">2</div>
+                <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--border-subtle, #1a1a1a); display: flex; align-items: center; justify-content: center; background: var(--bg-surface, #0a0a0a); margin-right: 12px; font-size: 0.7rem; color: var(--text-tertiary, #52525b);">2</div>
                 <div style="flex: 1;">
-                    <div style="font-size: 0.75rem; color: #666666; font-weight: 500;">Enrichment</div>
-                    <div style="font-size: 0.65rem; color: #444444; margin-top: 2px;">Pending</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary, #71717a); font-weight: 500;">Enrichment</div>
+                    <div style="font-size: 0.65rem; color: var(--text-tertiary, #52525b); margin-top: 2px;">Pending</div>
                 </div>
             </div>
 
             <div style="display: flex; align-items: flex-start; margin-bottom: 14px;">
-                <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #333333; display: flex; align-items: center; justify-content: center; background: #000000; margin-right: 12px; font-size: 0.7rem;">3</div>
+                <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--border-subtle, #1a1a1a); display: flex; align-items: center; justify-content: center; background: var(--bg-surface, #0a0a0a); margin-right: 12px; font-size: 0.7rem; color: var(--text-tertiary, #52525b);">3</div>
                 <div style="flex: 1;">
-                    <div style="font-size: 0.75rem; color: #666666; font-weight: 500;">Analysis</div>
-                    <div style="font-size: 0.65rem; color: #444444; margin-top: 2px;">Pending</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary, #71717a); font-weight: 500;">Analysis</div>
+                    <div style="font-size: 0.65rem; color: var(--text-tertiary, #52525b); margin-top: 2px;">Pending</div>
                 </div>
             </div>
 
             <div style="display: flex; align-items: flex-start; margin-bottom: 14px;">
-                <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #333333; display: flex; align-items: center; justify-content: center; background: #000000; margin-right: 12px; font-size: 0.7rem;">4</div>
+                <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--border-subtle, #1a1a1a); display: flex; align-items: center; justify-content: center; background: var(--bg-surface, #0a0a0a); margin-right: 12px; font-size: 0.7rem; color: var(--text-tertiary, #52525b);">4</div>
                 <div style="flex: 1;">
-                    <div style="font-size: 0.75rem; color: #666666; font-weight: 500;">Investigation</div>
-                    <div style="font-size: 0.65rem; color: #444444; margin-top: 2px;">Pending</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary, #71717a); font-weight: 500;">Investigation</div>
+                    <div style="font-size: 0.65rem; color: var(--text-tertiary, #52525b); margin-top: 2px;">Pending</div>
                 </div>
             </div>
 
             <div style="display: flex; align-items: flex-start; margin-bottom: 14px;">
-                <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #333333; display: flex; align-items: center; justify-content: center; background: #000000; margin-right: 12px; font-size: 0.7rem;">5</div>
+                <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--border-subtle, #1a1a1a); display: flex; align-items: center; justify-content: center; background: var(--bg-surface, #0a0a0a); margin-right: 12px; font-size: 0.7rem; color: var(--text-tertiary, #52525b);">5</div>
                 <div style="flex: 1;">
-                    <div style="font-size: 0.75rem; color: #666666; font-weight: 500;">Response</div>
-                    <div style="font-size: 0.65rem; color: #444444; margin-top: 2px;">Pending</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary, #71717a); font-weight: 500;">Response</div>
+                    <div style="font-size: 0.65rem; color: var(--text-tertiary, #52525b); margin-top: 2px;">Pending</div>
                 </div>
             </div>
 
             <div style="display: flex; align-items: flex-start;">
-                <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #333333; display: flex; align-items: center; justify-content: center; background: #000000; margin-right: 12px; font-size: 0.7rem;">6</div>
+                <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--border-subtle, #1a1a1a); display: flex; align-items: center; justify-content: center; background: var(--bg-surface, #0a0a0a); margin-right: 12px; font-size: 0.7rem; color: var(--text-tertiary, #52525b);">6</div>
                 <div style="flex: 1;">
-                    <div style="font-size: 0.75rem; color: #666666; font-weight: 500;">Communication</div>
-                    <div style="font-size: 0.65rem; color: #444444; margin-top: 2px;">Pending</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary, #71717a); font-weight: 500;">Communication</div>
+                    <div style="font-size: 0.65rem; color: var(--text-tertiary, #52525b); margin-top: 2px;">Pending</div>
                 </div>
             </div>
         </div>
 
         <!-- Time Footer -->
-        <div style="margin-top: 20px; padding-top: 14px; border-top: 1px solid #1a1a1a;">
+        <div style="margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border-subtle, #1a1a1a);">
             <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 0.7rem; color: #999999; font-weight: 500; letter-spacing: 0.05em;">TIME</span>
-                <span style="font-size: 0.8rem; color: #e8e8e8; font-weight: 600;">--</span>
+                <span style="font-size: 0.7rem; color: var(--text-secondary, #71717a); font-weight: 500; letter-spacing: 0.1em;">TIME</span>
+                <span style="font-size: 0.8rem; color: var(--text-primary, #ffffff); font-weight: 600;">--</span>
             </div>
         </div>
     </div>
@@ -164,18 +164,18 @@ def get_status_compact_html(
         (6, "communication", "Communication")
     ]
 
-    # Progress bar styling with enhanced animations
+    # Progress bar styling with Bento neon green accent
     if progress_pct >= 100:
-        bar_gradient = "linear-gradient(90deg, #10b981 0%, #059669 100%)"
-        bar_shadow = "0 0 12px rgba(16, 185, 129, 0.4)"
-        bar_animation = "animation: successGlow 2s ease-in-out infinite;"
+        bar_gradient = "linear-gradient(90deg, #00ff88 0%, #10b981 100%)"  # Neon green
+        bar_shadow = "0 0 20px rgba(0, 255, 136, 0.4)"
+        bar_animation = "animation: accentGlow 2s ease-in-out infinite;"
     elif progress_pct >= 50:
-        bar_gradient = "linear-gradient(90deg, #e8e8e8 0%, #999999 100%)"
-        bar_shadow = "0 0 10px rgba(232, 232, 232, 0.2)"
+        bar_gradient = "linear-gradient(90deg, #00ff88 0%, #00cc6a 100%)"  # Neon green
+        bar_shadow = "0 0 15px rgba(0, 255, 136, 0.3)"
         bar_animation = ""
     else:
-        bar_gradient = "linear-gradient(90deg, #666666 0%, #444444 100%)"
-        bar_shadow = "0 0 8px rgba(102, 102, 102, 0.2)"
+        bar_gradient = "linear-gradient(90deg, #00ff88 0%, #00aa55 100%)"  # Neon green dimmer
+        bar_shadow = "0 0 10px rgba(0, 255, 136, 0.2)"
         bar_animation = ""
 
     # Build vertical steps with enhanced styling
@@ -183,18 +183,18 @@ def get_status_compact_html(
     for step_num, node_id, label in nodes:
         agent_color = AGENT_COLORS.get(node_id, "#666666")
 
-        # Determine step state with agent-specific colors
+        # Determine step state with agent-specific colors (Bento style)
         if node_id in completed_nodes:
-            # Completed - green checkmark with agent accent
+            # Completed - neon green checkmark with agent accent
             circle_style = f"""
                 background: linear-gradient(135deg, {agent_color}22 0%, #000000 100%);
-                border: 2px solid #10b981;
-                box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+                border: 2px solid #00ff88;
+                box-shadow: 0 0 12px rgba(0, 255, 136, 0.3);
             """
-            circle_content = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>'
-            title_color = "#10b981"
+            circle_content = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#00ff88" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>'
+            title_color = "#00ff88"
             status_text = "Completed"
-            status_color = "#059669"
+            status_color = "#10b981"
             row_animation = ""
         elif node_id == current_node:
             # In Progress - pulsing with agent color
@@ -235,11 +235,11 @@ def get_status_compact_html(
         is_last = (step_num == 6)
         margin_bottom = "0" if is_last else "14px"
 
-        # Add connecting line for non-last items
+        # Add connecting line for non-last items (Bento neon green)
         connector = ""
         if not is_last:
             next_node = nodes[step_num][1] if step_num < len(nodes) else None
-            line_color = "#10b981" if node_id in completed_nodes else "#1a1a1a"
+            line_color = "#00ff88" if node_id in completed_nodes else "var(--border-subtle, #1a1a1a)"
             connector = f'<div style="position: absolute; left: 11px; top: 28px; width: 2px; height: 12px; background: {line_color};"></div>'
 
         steps_html += f"""
@@ -255,20 +255,20 @@ def get_status_compact_html(
         </div>
         """
 
-    # Note: Keyframe animations are in global CSS (ui/styles/css.py)
+    # Note: Keyframe animations are in global CSS (ui/styles/css.py and bento_css.py)
     # This prevents flicker from re-parsing styles on each update
 
     return f"""
-    <div style="font-family: 'JetBrains Mono', monospace;">
+    <div style="font-family: var(--font-mono, 'JetBrains Mono', monospace);">
         <!-- Progress Header -->
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <span style="font-size: 0.7rem; color: #999999; font-weight: 500; letter-spacing: 0.05em;">PROGRESS</span>
-            <span style="font-size: 0.8rem; color: #e8e8e8; font-weight: 600;">{progress_pct}%</span>
+            <span style="font-size: 0.7rem; color: var(--text-secondary, #71717a); font-weight: 500; letter-spacing: 0.1em;">PROGRESS</span>
+            <span style="font-size: 0.8rem; color: var(--text-primary, #ffffff); font-weight: 600;">{progress_pct}%</span>
         </div>
 
-        <!-- Progress Bar with shine effect -->
-        <div style="background: #0a0a0a; border: 1px solid #1a1a1a; height: 6px; border-radius: 4px; overflow: hidden; margin-bottom: 20px; position: relative;">
-            <div style="background: {bar_gradient}; width: {progress_pct}%; height: 100%; transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: {bar_shadow}; {bar_animation}"></div>
+        <!-- Progress Bar with Bento styling -->
+        <div style="background: var(--bg-elevated, #111111); border: 1px solid var(--border-subtle, #1a1a1a); height: 6px; border-radius: 9999px; overflow: hidden; margin-bottom: 20px; position: relative;">
+            <div style="background: {bar_gradient}; width: {progress_pct}%; height: 100%; transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: {bar_shadow}; border-radius: 9999px; {bar_animation}"></div>
         </div>
 
         <!-- Workflow Steps (Vertical) -->
@@ -277,10 +277,10 @@ def get_status_compact_html(
         </div>
 
         <!-- Time Footer -->
-        <div style="margin-top: 20px; padding-top: 14px; border-top: 1px solid #1a1a1a;">
+        <div style="margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border-subtle, #1a1a1a);">
             <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 0.7rem; color: #999999; font-weight: 500; letter-spacing: 0.05em;">TIME</span>
-                <span style="font-size: 0.8rem; color: #e8e8e8; font-weight: 600;">{total_time:.1f}s</span>
+                <span style="font-size: 0.7rem; color: var(--text-secondary, #71717a); font-weight: 500; letter-spacing: 0.1em;">TIME</span>
+                <span style="font-size: 0.8rem; color: var(--text-primary, #ffffff); font-weight: 600;">{total_time:.1f}s</span>
             </div>
             {get_threat_score_html(threat_score, progress_pct)}
         </div>

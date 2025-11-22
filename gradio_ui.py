@@ -43,6 +43,7 @@ from src.state import create_initial_state
 # Import from ui modules (modularized components)
 from ui.config.agents import AGENT_CONFIG, NODE_PROGRESS_MAP
 from ui.styles.css import GLOBAL_CSS, AUTO_SCROLL_JS
+from ui.styles.bento_css import get_bento_css
 from ui.helpers.html import sanitize_html as ui_sanitize_html, markdown_to_html
 from ui.helpers.formatters import build_enrichment_data, format_activity_log, format_error_html
 from ui.components.agent_chat import format_agent_chat_html
@@ -56,6 +57,9 @@ from ui.components.memory_context import (
     format_similar_incidents_html,
     format_campaign_alert_html,
 )
+from ui.components.agent_orchestration import create_agent_pipeline, AGENT_CONFIG as BENTO_AGENT_CONFIG
+from ui.components.mcp_status import create_mcp_status_card
+from ui.components.threat_gauge import create_threat_score_card, create_score_ring, get_severity_from_score
 
 
 # ===== HTML Sanitization (now imported from ui.helpers.html) =====
@@ -581,127 +585,152 @@ def create_gradio_interface():
     sample_alerts = load_sample_alerts()
     default_alert_json = json.dumps(sample_alerts[0], indent=2) if sample_alerts else "{}"
 
-    # Create ultra-minimal dark theme inspired by crypto/AI dashboards
+    # Bento UI Theme - Neon green accent on pure black
+    # Inspired by Apple Vision Pro / Linear / Arc Browser
     dark_minimal_theme = gr.themes.Base(
-        primary_hue=gr.themes.colors.slate,
+        primary_hue=gr.themes.colors.emerald,  # Neon green family
         secondary_hue=gr.themes.colors.slate,
-        neutral_hue=gr.themes.colors.slate,
+        neutral_hue=gr.themes.colors.zinc,
         font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui", "sans-serif"],
     ).set(
-        # === BACKGROUNDS ===
+        # === BACKGROUNDS (Pure black) ===
         body_background_fill="#000000",
         body_background_fill_dark="#000000",
         background_fill_primary="#000000",
         background_fill_primary_dark="#000000",
         background_fill_secondary="#0a0a0a",
         background_fill_secondary_dark="#0a0a0a",
-        
-        # === BORDERS ===
+
+        # === BORDERS (Subtle) ===
         border_color_primary="#1a1a1a",
         border_color_primary_dark="#1a1a1a",
-        border_color_accent="#333333",
-        border_color_accent_dark="#333333",
-        
-        # === BUTTONS - Minimal ===
-        button_primary_background_fill="#000000",
-        button_primary_background_fill_dark="#000000",
-        button_primary_background_fill_hover="#111111",
-        button_primary_background_fill_hover_dark="#111111",
-        button_primary_border_color="#e8e8e8",
-        button_primary_border_color_dark="#e8e8e8",
-        button_primary_text_color="#e8e8e8",
-        button_primary_text_color_dark="#e8e8e8",
-        
-        button_secondary_background_fill="#000000",
-        button_secondary_background_fill_dark="#000000",
-        button_secondary_background_fill_hover="#0a0a0a",
-        button_secondary_background_fill_hover_dark="#0a0a0a",
+        border_color_accent="#00ff88",  # Neon green accent
+        border_color_accent_dark="#00ff88",
+
+        # === BUTTONS - Neon Green Accent ===
+        button_primary_background_fill="#00ff88",
+        button_primary_background_fill_dark="#00ff88",
+        button_primary_background_fill_hover="#00ff99",
+        button_primary_background_fill_hover_dark="#00ff99",
+        button_primary_border_color="#00ff88",
+        button_primary_border_color_dark="#00ff88",
+        button_primary_text_color="#000000",  # Black text on green
+        button_primary_text_color_dark="#000000",
+
+        button_secondary_background_fill="#0a0a0a",
+        button_secondary_background_fill_dark="#0a0a0a",
+        button_secondary_background_fill_hover="#111111",
+        button_secondary_background_fill_hover_dark="#111111",
         button_secondary_border_color="#1a1a1a",
         button_secondary_border_color_dark="#1a1a1a",
-        button_secondary_text_color="#999999",
-        button_secondary_text_color_dark="#999999",
-        
+        button_secondary_text_color="#71717a",
+        button_secondary_text_color_dark="#71717a",
+
         # === INPUTS ===
-        input_background_fill="#000000",
-        input_background_fill_dark="#000000",
-        input_background_fill_focus="#000000",
-        input_background_fill_focus_dark="#000000",
+        input_background_fill="#0a0a0a",
+        input_background_fill_dark="#0a0a0a",
+        input_background_fill_focus="#0a0a0a",
+        input_background_fill_focus_dark="#0a0a0a",
         input_border_color="#1a1a1a",
         input_border_color_dark="#1a1a1a",
-        input_border_color_focus="#e8e8e8",
-        input_border_color_focus_dark="#e8e8e8",
+        input_border_color_focus="#00ff88",  # Neon green on focus
+        input_border_color_focus_dark="#00ff88",
         input_border_width="1px",
-        input_shadow="0 0 0 0 rgba(255, 255, 255, 0)",
-        input_shadow_focus="0 0 8px rgba(255, 255, 255, 0.08)",
-        
+        input_shadow="0 0 0 0 rgba(0, 255, 136, 0)",
+        input_shadow_focus="0 0 0 2px rgba(0, 255, 136, 0.2)",
+
         # === TEXT COLORS ===
-        block_title_text_color="#e8e8e8",
-        block_title_text_color_dark="#e8e8e8",
-        block_label_text_color="#999999",
-        block_label_text_color_dark="#999999",
-        block_info_text_color="#666666",
-        block_info_text_color_dark="#666666",
-        body_text_color="#e8e8e8",
-        body_text_color_dark="#e8e8e8",
-        body_text_color_subdued="#999999",
-        body_text_color_subdued_dark="#999999",
-        
+        block_title_text_color="#ffffff",
+        block_title_text_color_dark="#ffffff",
+        block_label_text_color="#71717a",
+        block_label_text_color_dark="#71717a",
+        block_info_text_color="#52525b",
+        block_info_text_color_dark="#52525b",
+        body_text_color="#ffffff",
+        body_text_color_dark="#ffffff",
+        body_text_color_subdued="#71717a",
+        body_text_color_subdued_dark="#71717a",
+
         # === CODE BLOCKS ===
         code_background_fill="#0a0a0a",
         code_background_fill_dark="#0a0a0a",
-        
+
         # === PANELS/BLOCKS ===
-        panel_background_fill="#000000",
-        panel_background_fill_dark="#000000",
+        panel_background_fill="#0a0a0a",
+        panel_background_fill_dark="#0a0a0a",
         panel_border_color="#1a1a1a",
         panel_border_color_dark="#1a1a1a",
         panel_border_width="1px",
-        
+
         # === SHADOWS ===
-        shadow_drop="0 1px 3px rgba(255, 255, 255, 0.03)",
-        shadow_drop_lg="0 2px 6px rgba(255, 255, 255, 0.05)",
-        shadow_inset="inset 0 1px 2px rgba(0, 0, 0, 0.5)",
-        shadow_spread="0 0 12px rgba(255, 255, 255, 0.06)",
-        
-        # === SPACING ===
-        block_padding="32px",
-        container_radius="12px",
-        block_radius="12px",
-        
+        shadow_drop="0 1px 3px rgba(0, 0, 0, 0.3)",
+        shadow_drop_lg="0 4px 12px rgba(0, 0, 0, 0.4)",
+        shadow_inset="inset 0 1px 2px rgba(0, 0, 0, 0.3)",
+        shadow_spread="0 0 20px rgba(0, 255, 136, 0.05)",
+
+        # === SPACING (Bento = generous) ===
+        block_padding="24px",
+        container_radius="24px",  # Extra rounded for Bento
+        block_radius="16px",
+
         # === SLIDERS & INTERACTIVE ===
-        slider_color="#e8e8e8",
-        slider_color_dark="#e8e8e8",
-        checkbox_background_color="#000000",
-        checkbox_background_color_dark="#000000",
-        checkbox_background_color_selected="#e8e8e8",
-        checkbox_background_color_selected_dark="#e8e8e8",
+        slider_color="#00ff88",
+        slider_color_dark="#00ff88",
+        checkbox_background_color="#0a0a0a",
+        checkbox_background_color_dark="#0a0a0a",
+        checkbox_background_color_selected="#00ff88",
+        checkbox_background_color_selected_dark="#00ff88",
         checkbox_border_color="#1a1a1a",
         checkbox_border_color_dark="#1a1a1a",
-        checkbox_border_color_focus="#e8e8e8",
-        checkbox_border_color_focus_dark="#e8e8e8",
-        checkbox_label_text_color="#e8e8e8",
-        checkbox_label_text_color_dark="#e8e8e8",
+        checkbox_border_color_focus="#00ff88",
+        checkbox_border_color_focus_dark="#00ff88",
+        checkbox_label_text_color="#ffffff",
+        checkbox_label_text_color_dark="#ffffff",
     )
     
     # Create Gradio Blocks interface
     # CSS and JS are imported from ui.styles.css module
+    # Combine global CSS with Bento CSS for modern UI
+    combined_css = GLOBAL_CSS + "\n" + get_bento_css()
+
     with gr.Blocks(
         title="SOC Orchestrator",
         theme=dark_minimal_theme,
-        css=GLOBAL_CSS,
+        css=combined_css,
         js=AUTO_SCROLL_JS
     ) as demo:
 
-        # ===== MAIN LAYOUT: SIDEBAR (28%) | CONTENT (72%) =====
+        # ===== BENTO HEADER BAR =====
+        gr.HTML("""
+            <div class="bento-header">
+                <div class="bento-logo">
+                    <span style="font-size: 24px;">🛡️</span>
+                    <span class="bento-logo-text">SOC ORCHESTRATOR</span>
+                </div>
+                <span class="bento-version">⚡ v2.0</span>
+            </div>
+        """)
+
+        # ===== MAIN LAYOUT: SIDEBAR (25%) | CONTENT (75%) =====
         with gr.Row(elem_id="main_container"):
-            # ===== LEFT: SIDEBAR (28%) =====
-            with gr.Column(scale=28, min_width=320, elem_id="sidebar"):
-                with gr.Column(elem_id="sidebar_card"):
-                    # Unified Header
+            # ===== LEFT: SIDEBAR (25%) =====
+            with gr.Column(scale=25, min_width=300, elem_id="sidebar"):
+                # Alert Input Bento Card
+                gr.HTML("""
+                    <div class="bento-card" style="margin-bottom: 16px;">
+                        <div class="bento-card-header">
+                            <div class="bento-card-icon">🎯</div>
+                            <span class="bento-card-title">ALERT INPUT</span>
+                        </div>
+                    </div>
+                """, visible=False)  # Header rendered separately for cleaner layout
+
+                with gr.Column(elem_id="sidebar_card", elem_classes=["bento-card"]):
+                    # Bento Header for Alert Input
                     gr.HTML("""
-                        <div style="margin-bottom: 24px;">
-                            <div style="font-family: 'Inter', sans-serif; font-size: 1.1rem; font-weight: 600; color: #e8e8e8; margin-bottom: 8px; letter-spacing: -0.01em;">Investigation</div>
-                            <div style="font-family: 'Inter', sans-serif; font-size: 0.85rem; color: #999999; font-weight: 400; line-height: 1.5;">Paste alert JSON and start analysis.</div>
+                        <div class="bento-card-header" style="margin-bottom: 16px;">
+                            <div class="bento-card-icon">🎯</div>
+                            <span class="bento-card-title">ALERT INPUT</span>
                         </div>
                     """)
 
@@ -723,57 +752,76 @@ def create_gradio_interface():
                     )
 
                     investigate_btn = gr.Button(
-                        "🚀 Investigate",
+                        "▶ ANALYZE",
                         variant="primary",
                         size="lg",
-                        elem_id="investigate_btn"
+                        elem_id="investigate_btn",
+                        elem_classes=["analyze-button"]
                     )
 
-            # ===== RIGHT: CONTENT AREA (72%) - Multi-Tab Interface =====
-            with gr.Column(scale=72, elem_id="content_area"):
-                with gr.Tabs() as investigation_tabs:
+                    # MCP Servers Status Card (inside sidebar_card)
+                    # Only showing actual MCP servers: SIEM and Memory
+                    gr.HTML("""<div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border-subtle, #1a1a1a);"></div>""")
+                    mcp_status_html = gr.HTML(
+                        value=create_mcp_status_card({
+                            "siem": "connected",
+                            "memory": "connected",
+                        }),
+                        elem_id="mcp_status_panel"
+                    )
+
+            # ===== RIGHT: CONTENT AREA (75%) - Multi-Tab Interface =====
+            with gr.Column(scale=75, elem_id="content_area"):
+                with gr.Tabs(elem_classes=["bento-tabs"]) as investigation_tabs:
 
                     # ===== TAB 1: INVESTIGATION (Current Workflow) =====
                     with gr.Tab("🔍 Investigation", id="tab_investigation"):
-                        # Agent Reasoning (Top)
-                        with gr.Column(elem_id="reasoning_card"):
+                        # Agent Reasoning Card (Bento style)
+                        with gr.Column(elem_id="reasoning_card", elem_classes=["bento-card"]):
                             gr.HTML("""
-                                <div style="margin-bottom: 20px;">
-                                    <div style="font-family: 'Inter', sans-serif; font-size: 1.25rem; font-weight: 600; color: #e8e8e8; margin-bottom: 8px; letter-spacing: -0.02em;">Agent Reasoning</div>
-                                    <div style="font-family: 'Inter', sans-serif; font-size: 0.875rem; color: #999999; font-weight: 400; line-height: 1.5;">Live LLM reasoning from Analysis and Response agents.</div>
+                                <div class="bento-card-header">
+                                    <div class="bento-card-icon">💭</div>
+                                    <span class="bento-card-title">AGENT REASONING</span>
+                                    <span class="live-indicator">
+                                        <span class="live-dot"></span>
+                                        LIVE
+                                    </span>
                                 </div>
                             """)
                             reasoning_panel = gr.HTML(
-                                value="<div style='color: #666; padding: 20px; text-align: center;'>Agent reasoning will appear here as the investigation runs...</div>",
+                                value="""<div class="stream-container" style="min-height: 200px;">
+                                    <div style="color: var(--text-tertiary, #52525b); padding: 40px; text-align: center;">
+                                        Agent reasoning will stream here during investigation...
+                                    </div>
+                                </div>""",
                                 show_label=False,
                                 elem_id="reasoning_panel"
                             )
 
-                        # Investigation Results (Bottom)
-                        with gr.Column(elem_id="results_card"):
+                        # Investigation Results Card (Bento style)
+                        with gr.Column(elem_id="results_card", elem_classes=["bento-card"]):
                             gr.HTML("""
-                                <div style="margin-bottom: 20px;">
-                                    <div style="font-family: 'Inter', sans-serif; font-size: 1.1rem; font-weight: 600; color: #e8e8e8; margin-bottom: 8px; letter-spacing: -0.01em;">Investigation Results</div>
-                                    <div style="font-family: 'Inter', sans-serif; font-size: 0.85rem; color: #999999; font-weight: 400; line-height: 1.5;">Complete analysis with threat score and recommended actions.</div>
+                                <div class="bento-card-header">
+                                    <div class="bento-card-icon">📋</div>
+                                    <span class="bento-card-title">INVESTIGATION RESULTS</span>
                                 </div>
                             """)
                             result_html = gr.HTML(
+                                value="""<div style="color: var(--text-tertiary, #52525b); padding: 40px; text-align: center;">
+                                    Investigation results will appear here after analysis completes...
+                                </div>""",
                                 show_label=False,
                                 elem_id="result_html"
                             )
 
                     # ===== TAB 2: MEMORY CONTEXT =====
-                    with gr.Tab("🧠 Memory Context", id="tab_memory"):
-                        # Memory Reasoning Panel
-                        with gr.Column(elem_id="memory_reasoning_card"):
+                    with gr.Tab("🧠 Memory", id="tab_memory"):
+                        # Memory Reasoning Card (Bento style)
+                        with gr.Column(elem_id="memory_reasoning_card", elem_classes=["bento-card"]):
                             gr.HTML("""
-                                <div style="margin-bottom: 20px;">
-                                    <div style="font-family: 'Inter', sans-serif; font-size: 1.1rem; font-weight: 600; color: #e8e8e8; margin-bottom: 8px;">
-                                        💭 Memory Reasoning
-                                    </div>
-                                    <div style="font-family: 'Inter', sans-serif; font-size: 0.85rem; color: #999999;">
-                                        AI explains why past incidents are similar
-                                    </div>
+                                <div class="bento-card-header">
+                                    <div class="bento-card-icon">💭</div>
+                                    <span class="bento-card-title">MEMORY REASONING</span>
                                 </div>
                             """)
                             memory_reasoning_display = gr.Markdown(
@@ -782,75 +830,83 @@ def create_gradio_interface():
                                 elem_id="memory_reasoning_panel"
                             )
 
-                        # Similar Incidents Cards
-                        with gr.Column(elem_id="similar_incidents_card"):
+                        # Similar Incidents Card (Bento style)
+                        with gr.Column(elem_id="similar_incidents_card", elem_classes=["bento-card"]):
                             gr.HTML("""
-                                <div style="margin-bottom: 20px; margin-top: 24px;">
-                                    <div style="font-family: 'Inter', sans-serif; font-size: 1.1rem; font-weight: 600; color: #e8e8e8; margin-bottom: 8px;">
-                                        🔍 Similar Past Incidents
-                                    </div>
-                                    <div style="font-family: 'Inter', sans-serif; font-size: 0.85rem; color: #999999;">
-                                        Incidents with matching patterns and behaviors
-                                    </div>
+                                <div class="bento-card-header">
+                                    <div class="bento-card-icon">🔍</div>
+                                    <span class="bento-card-title">SIMILAR PAST INCIDENTS</span>
                                 </div>
                             """)
                             similar_incidents_display = gr.HTML(
-                                value="",
+                                value="""<div style="color: var(--text-tertiary, #52525b); padding: 40px; text-align: center;">
+                                    Similar incidents will appear here after investigation...
+                                </div>""",
                                 show_label=False,
                                 elem_id="similar_incidents_html"
                             )
 
-                        # Campaign Detection Alert (conditional visibility)
-                        campaign_alert_display = gr.HTML(
-                            value="",
-                            visible=True,
-                            show_label=False,
-                            elem_id="campaign_alert_html"
-                        )
+                        # Campaign Detection Card (Bento style)
+                        with gr.Column(elem_classes=["bento-card"]):
+                            gr.HTML("""
+                                <div class="bento-card-header">
+                                    <div class="bento-card-icon">🚨</div>
+                                    <span class="bento-card-title">CAMPAIGN DETECTION</span>
+                                </div>
+                            """)
+                            campaign_alert_display = gr.HTML(
+                                value="""<div style="color: var(--text-tertiary, #52525b); padding: 40px; text-align: center;">
+                                    Campaign information will appear here if detected...
+                                </div>""",
+                                visible=True,
+                                show_label=False,
+                                elem_id="campaign_alert_html"
+                            )
 
                     # ===== TAB 3: CHAT =====
                     with gr.Tab("💬 Chat", id="tab_chat"):
-                        with gr.Column(elem_id="chat_card"):
+                        # Chat Interface Card (Full Width)
+                        with gr.Column(elem_id="chat_card", elem_classes=["bento-card"]):
                             gr.HTML("""
-                                <div style="margin-bottom: 20px;">
-                                    <div style="font-family: 'Inter', sans-serif; font-size: 1.25rem; font-weight: 600; color: #e8e8e8; margin-bottom: 8px;">
-                                        Chat with Investigation History
-                                    </div>
-                                    <div style="font-family: 'Inter', sans-serif; font-size: 0.875rem; color: #999999;">
-                                        Ask questions about past investigations, campaigns, and statistics
-                                    </div>
+                                <div class="bento-card-header">
+                                    <div class="bento-card-icon">💬</div>
+                                    <span class="bento-card-title">AI ASSISTANT</span>
                                 </div>
                             """)
-                            
-                            # Chatbot
+
+                            # Chatbot with Bento styling
                             chatbot = gr.Chatbot(
-                                height=500,
+                                height=400,
                                 show_label=False,
                                 elem_id="chat_history",
-                                bubble_full_width=False
+                                bubble_full_width=False,
+                                elem_classes=["chat-messages"]
                             )
-                            
-                            # Message input
-                            with gr.Row():
+
+                            # Message input with Bento styling
+                            with gr.Row(elem_classes=["chat-input-container"]):
                                 chat_input = gr.Textbox(
                                     placeholder="Ask about past investigations...",
                                     show_label=False,
                                     scale=9,
-                                    container=False
+                                    container=False,
+                                    elem_classes=["chat-input"]
                                 )
-                                chat_send = gr.Button("Send", scale=1, variant="primary")
-                            
-                            # Example queries
+                                chat_send = gr.Button("▶ Send", scale=1, variant="primary", elem_classes=["chat-send-btn"])
+
+                        # Quick Actions Card (Full Width)
+                        with gr.Column(elem_classes=["bento-card"]):
                             gr.HTML("""
-                                <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #1a1a1a;">
-                                    <div style="font-size: 0.8rem; color: #666; margin-bottom: 12px; font-family: 'Inter', sans-serif;">Quick Actions:</div>
+                                <div class="bento-card-header">
+                                    <div class="bento-card-icon">⚡</div>
+                                    <span class="bento-card-title">QUICK ACTIONS</span>
                                 </div>
                             """)
-                            
+
                             with gr.Row():
-                                example_btn1 = gr.Button("📊 Show statistics", size="sm")
-                                example_btn2 = gr.Button("🔍 High-severity alerts", size="sm")
-                                example_btn3 = gr.Button("🚨 Active campaigns", size="sm")
+                                example_btn1 = gr.Button("📊 Statistics", size="sm", elem_classes=["quick-action-card"])
+                                example_btn2 = gr.Button("🔴 High Alerts", size="sm", elem_classes=["quick-action-card"])
+                                example_btn3 = gr.Button("🎯 Campaigns", size="sm", elem_classes=["quick-action-card"])
                             
                             # Connect chat functionality with streaming status updates
                             from src.chat_graph import chat_with_history_streaming

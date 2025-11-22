@@ -10,6 +10,7 @@ from ui.styles.animations import (
     AGENT_COLORS,
     SEVERITY_COLORS,
 )
+from ui.styles.bento_css import get_bento_css
 
 __all__ = [
     "GLOBAL_CSS",
@@ -21,4 +22,5 @@ __all__ = [
     "get_animation_js",
     "AGENT_COLORS",
     "SEVERITY_COLORS",
+    "get_bento_css",
 ]
