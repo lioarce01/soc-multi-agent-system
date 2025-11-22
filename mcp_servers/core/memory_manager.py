@@ -362,6 +362,26 @@ class IsolatedMemoryManager:
             for doc, score in results:
                 if doc.metadata.get("incident_id") == incident_id:
                     logger.info(f"Found incident {incident_id} with similarity score {score:.3f}")
+
+                    # Parse JSON fields from metadata
+                    import json as json_module
+                    recommendations = []
+                    mitre_mappings = []
+
+                    recommendations_json = doc.metadata.get("recommendations_json", "[]")
+                    if recommendations_json:
+                        try:
+                            recommendations = json_module.loads(recommendations_json)
+                        except (json_module.JSONDecodeError, TypeError):
+                            logger.warning(f"Failed to parse recommendations_json for {incident_id}")
+
+                    mitre_json = doc.metadata.get("mitre_mappings_json", "[]")
+                    if mitre_json:
+                        try:
+                            mitre_mappings = json_module.loads(mitre_json)
+                        except (json_module.JSONDecodeError, TypeError):
+                            logger.warning(f"Failed to parse mitre_mappings_json for {incident_id}")
+
                     return {
                         "incident_id": doc.metadata.get("incident_id"),
                         "timestamp": doc.metadata.get("timestamp"),
@@ -370,7 +390,10 @@ class IsolatedMemoryManager:
                         "attack_stage": doc.metadata.get("attack_stage"),
                         "threat_category": doc.metadata.get("threat_category"),
                         "source_ip": doc.metadata.get("source_ip"),
-                        "summary": doc.page_content
+                        "summary": doc.page_content,
+                        "recommendations": recommendations,
+                        "mitre_mappings": mitre_mappings,
+                        "report": doc.metadata.get("report", ""),
                     }
 
             logger.warning(f"Incident {incident_id} not found in database")
@@ -526,6 +549,12 @@ class IsolatedMemoryManager:
         if report:
             content_parts.append(f"Report: {report[:500]}")
 
+        # Serialize recommendations and mitre_mappings as JSON strings for metadata storage
+        import json as json_module
+        recommendations = incident_data.get("recommendations", [])
+        recommendations_json = json_module.dumps(recommendations) if recommendations else "[]"
+        mitre_json = json_module.dumps(mitre_mappings) if mitre_mappings else "[]"
+
         document = Document(
             page_content="\n".join(content_parts),
             metadata={
@@ -536,6 +565,9 @@ class IsolatedMemoryManager:
                 "attack_stage": incident_data.get("attack_stage", "Unknown"),
                 "threat_category": incident_data.get("threat_category", "Unknown"),
                 "source_ip": alert_data.get("source_ip", "Unknown"),
+                "recommendations_json": recommendations_json,
+                "mitre_mappings_json": mitre_json,
+                "report": report[:1000] if report else "",  # Store first 1000 chars of report
             }
         )
 

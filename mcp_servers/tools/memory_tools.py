@@ -23,11 +23,12 @@ def register_memory_tools(mcp_server: FastMCP, memory_manager: IsolatedMemoryMan
     """
 
     @mcp_server.tool(
-        description="Search past security investigations using semantic search. Use when user asks to find, search, or look for incidents, alerts, or investigations. Use get_investigation_statistics for statistics and summaries - this tool is for finding individual incidents. Supports filtering by alert type (phishing, malware, brute_force). If only alert_type is provided, use that as the search query. Returns list of matching incidents with similarity scores, threat scores, and metadata."
+        description="Search past security investigations using semantic search. Use when user asks to find, search, or look for incidents, alerts, or investigations. Use get_investigation_statistics for statistics and summaries - this tool is for finding individual incidents. Supports filtering by alert type (phishing, malware, brute_force) and by severity using min_threat_score (0.7 for high severity, 0.5 for medium). If only alert_type is provided, use that as the search query. Returns list of matching incidents with similarity scores, threat scores, and metadata."
     )
     async def search_incidents(
         query: Optional[str] = None,
         alert_type: Optional[str] = None,
+        min_threat_score: Optional[float] = None,
         limit: int = 10
     ) -> Dict[str, Any]:
         """
@@ -36,6 +37,7 @@ def register_memory_tools(mcp_server: FastMCP, memory_manager: IsolatedMemoryMan
         Args:
             query: Optional search query text (e.g., "phishing emails", "malware detection")
             alert_type: Optional filter by alert type (e.g., "phishing", "malware", "brute_force")
+            min_threat_score: Optional minimum threat score filter (0.0-1.0). Use 0.7 for high severity, 0.5 for medium.
             limit: Maximum number of results to return (default: 10)
 
         Returns:
@@ -50,7 +52,7 @@ def register_memory_tools(mcp_server: FastMCP, memory_manager: IsolatedMemoryMan
                 query = "security incident"
                 logger.debug(f"No query or alert_type provided, using default query: 'security incident'")
 
-        logger.info(f"Tool invoked: search_incidents(query='{query[:50]}...', alert_type={alert_type}, limit={limit})")
+        logger.info(f"Tool invoked: search_incidents(query='{query[:50]}...', alert_type={alert_type}, min_threat_score={min_threat_score}, limit={limit})")
 
         try:
             if memory_manager.incident_db is None:
@@ -80,13 +82,27 @@ def register_memory_tools(mcp_server: FastMCP, memory_manager: IsolatedMemoryMan
                 results = [r for r in results if r.get("alert_type") == alert_type]
                 logger.debug(f"Filtered results: {before_filter} -> {len(results)} after alert_type filter")
 
+            # Filter by minimum threat score (severity) if specified
+            if min_threat_score is not None:
+                before_filter = len(results)
+                results = [r for r in results if r.get("threat_score", 0.0) >= min_threat_score]
+                logger.debug(f"Filtered results: {before_filter} -> {len(results)} after min_threat_score filter ({min_threat_score})")
+
             logger.info(f"search_incidents completed: found {len(results)} incidents")
+
+            # Build filters dict for response
+            filters = {}
+            if alert_type:
+                filters["alert_type"] = alert_type
+            if min_threat_score is not None:
+                filters["min_threat_score"] = min_threat_score
+                filters["severity"] = "high" if min_threat_score >= 0.7 else "medium" if min_threat_score >= 0.5 else "low"
 
             return {
                 "incidents": results,
                 "count": len(results),
                 "query": query,
-                "filters": {"alert_type": alert_type} if alert_type else None
+                "filters": filters if filters else None
             }
         except Exception as e:
             logger.error(f"Error in search_incidents tool: {e}", exc_info=True)
